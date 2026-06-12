@@ -8,12 +8,12 @@
    Si lo dejas vacío, la app funciona en MODO DEMO local (sin internet).
    =========================================================================== */
 window.APP_CONFIG = {
-  SUPABASE_URL: '',        // ej. https://abcd1234.supabase.co
-  SUPABASE_ANON_KEY: '',   // ej. eyJhbGciOi....  (clave pública, segura de exponer)
+  SUPABASE_URL: 'https://owvbboityzjezxwlbpaa.supabase.co',        // ej. https://abcd1234.supabase.co
+  SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im93dmJib2l0eXpqZXp4d2xicGFhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAyNTU1OTEsImV4cCI6MjA5NTgzMTU5MX0.TXSVONHD-GxLFvWnHVX_X_ULoma6MI6RS6d6vk-GjeI',   // ej. eyJhbGciOi....  (clave pública, segura de exponer)
 
   // Correos con rol ADMIN (ven la cartera de TODOS los socios).
   // OJO: el admin es OTRO socio, no el usuario principal. Reemplaza por el correo real.
-  ADMIN_EMAILS: ['socio2@insitum.mx'],
+  ADMIN_EMAILS: ['valeria3320@gmail.com'],
 
   // Los 3 socios. En MODO DEMO se entra eligiéndolos; en la nube se crean en Supabase.
   // Reemplaza nombres y correos por los reales de cada socio.
