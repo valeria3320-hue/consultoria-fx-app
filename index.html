@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Insitum Capital — CRM</title>
+<meta name="description" content="CRM de consultoría financiera: prospección, clientes, cotizador, citas y notas de mercado por industria." />
+<meta name="theme-color" content="#0f141d" />
+<link rel="manifest" href="manifest.json" />
+<link rel="icon" type="image/png" href="assets/icon-192.png" />
+<link rel="apple-touch-icon" href="assets/icon-192.png" />
+<link rel="stylesheet" href="assets/styles.css" />
+</head>
+<body>
+
+<!-- LOGIN -->
+<div id="login" class="login-screen">
+  <div class="login-card">
+    <div class="login-brand"><div class="brand-mark" id="login-mark">IC</div><div><strong id="login-brand-name">Insitum Capital</strong><span>CRM de consultoría financiera</span></div></div>
+    <p class="login-mode" id="login-mode"></p>
+    <form id="form-login">
+      <label id="lbl-demo-user" class="hidden">Selecciona tu usuario
+        <select name="demoUser" id="demo-user-select"></select>
+      </label>
+      <label id="lbl-email">Correo<input name="email" type="email" placeholder="tucorreo@insitum.mx" autocomplete="username" /></label>
+      <label id="lbl-pass">Contraseña<input name="password" type="password" placeholder="••••••••" autocomplete="current-password" /></label>
+      <button type="submit" class="primary-btn login-btn">Entrar</button>
+      <p id="login-error" class="login-error hidden"></p>
+    </form>
+    <p class="login-foot">🔒 Cada socio entra a su propia cartera. El administrador ve la de todos.</p>
+  </div>
+</div>
+
+<!-- APP -->
+<div id="app" class="hidden">
+  <aside class="sidebar">
+    <div class="brand"><div class="brand-mark" id="brand-mark">IC</div><div class="brand-text"><strong id="brand-name">Insitum Capital</strong><span>Consultoría financiera</span></div></div>
+    <nav class="nav">
+      <button class="nav-btn active" data-view="midia"><span class="ico">☀</span> Mi Día</button>
+      <button class="nav-btn" data-view="resumen"><span class="ico">▦</span> Resumen</button>
+      <button class="nav-btn" data-view="pipeline"><span class="ico">▤</span> Pipeline</button>
+      <button class="nav-btn" data-view="clientes"><span class="ico">☷</span> Clientes</button>
+      <button class="nav-btn" data-view="cotizador"><span class="ico">≣</span> Cotizador</button>
+      <button class="nav-btn" data-view="perfilador"><span class="ico">◎</span> Perfilador</button>
+      <button class="nav-btn" data-view="seguimiento"><span class="ico">◷</span> Seguimiento</button>
+      <button class="nav-btn" data-view="notas"><span class="ico">✎</span> Notas de mercado</button>
+      <button class="nav-btn" data-view="productos"><span class="ico">◈</span> Productos</button>
+      <button class="nav-btn" data-view="equipo" id="nav-equipo" hidden><span class="ico">★</span> Equipo</button>
+      <button class="nav-btn" data-view="playbook"><span class="ico">◉</span> Playbook</button>
+      <button class="nav-btn" data-view="ajustes"><span class="ico">⚙</span> Ajustes</button>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="user-badge"><div class="user-avatar" id="user-avatar">?</div><div class="user-info"><strong id="user-name">—</strong><span id="user-role">—</span></div><button class="icon-btn" id="btn-logout" title="Salir">⎋</button></div>
+      <button class="ghost-btn" id="btn-export">⤓ Respaldar (JSON)</button>
+      <button class="ghost-btn" id="btn-import">⤒ Restaurar</button>
+      <input type="file" id="file-import" accept="application/json" hidden />
+      <p class="privacy" id="privacy-note">🔒 Datos en este navegador. Respalda seguido.</p>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div class="topbar-left"><h1 id="view-title">Resumen</h1><span id="view-sub" class="muted"></span></div>
+      <div class="topbar-right">
+        <input type="search" id="global-search" placeholder="Buscar empresa, contacto…" />
+        <button class="primary-btn" id="btn-new-prospect">+ Nuevo cliente</button>
+      </div>
+    </header>
+    <section class="content">
+      <div class="view" id="view-midia"></div>
+      <div class="view hidden" id="view-resumen"></div>
+      <div class="view hidden" id="view-pipeline"></div>
+      <div class="view hidden" id="view-clientes"></div>
+      <div class="view hidden" id="view-cotizador"></div>
+      <div class="view hidden" id="view-perfilador"></div>
+      <div class="view hidden" id="view-seguimiento"></div>
+      <div class="view hidden" id="view-notas"></div>
+      <div class="view hidden" id="view-productos"></div>
+      <div class="view hidden" id="view-equipo"></div>
+      <div class="view hidden" id="view-playbook"></div>
+      <div class="view hidden" id="view-ajustes"></div>
+    </section>
+  </main>
+</div>
+
+<!-- Drawer ficha cliente -->
+<div class="drawer-overlay hidden" id="drawer-overlay"></div>
+<aside class="drawer hidden" id="drawer-client"></aside>
+
+<!-- Modal prospecto -->
+<div class="modal-overlay hidden" id="modal-prospect">
+  <div class="modal">
+    <div class="modal-head"><h2 id="modal-prospect-title">Nuevo cliente</h2><button class="icon-btn" data-close-modal>✕</button></div>
+    <form id="form-prospect" class="modal-body grid2">
+      <input type="hidden" name="id" />
+      <label>Empresa *<input name="empresa" required placeholder="Ej. Aceros del Norte SA" /></label>
+      <label>Contacto<input name="contacto" placeholder="Ej. Laura Méndez" /></label>
+      <label>Puesto<input name="puesto" placeholder="Ej. Tesorera / CFO" /></label>
+      <label>Teléfono<input name="telefono" placeholder="+52 ..." /></label>
+      <label>Email<input name="email" type="email" placeholder="contacto@empresa.com" /></label>
+      <label>Origen del lead<select name="fuente"><option>Referido</option><option>LinkedIn</option><option>Llamada en frío</option><option>Evento / Cámara</option><option>Inbound (web)</option><option>Base de datos</option><option>Otro</option></select></label>
+      <label>Industria / Segmento<select name="segmento" id="sel-segmento"></select></label>
+      <label>Etapa<select name="etapa" id="sel-etapa"></select></label>
+      <label class="full">Productos de interés<div class="chips" id="chips-productos"></div></label>
+      <label>Exposición / Volumen anual (USD)<input name="notional" type="number" min="0" step="1000" placeholder="Ej. 5000000" /></label>
+      <label>Comisión estimada (bps)<input name="feeBps" type="number" min="0" step="1" placeholder="Ej. 25" /><small class="hint">25 bps = 0.25% sobre el volumen</small></label>
+      <label>Probabilidad de cierre<select name="probabilidad"><option value="10">10% — frío</option><option value="25">25%</option><option value="50" selected>50% — interesado</option><option value="75">75% — propuesta enviada</option><option value="90">90% — por firmar</option></select></label>
+      <label>Próxima acción<input name="proximaAccion" placeholder="Ej. Enviar propuesta de forward" /></label>
+      <label>Fecha próxima acción<input name="fechaProxima" type="date" /></label>
+      <label class="full">Notas<textarea name="notas" rows="3" placeholder="Contexto, dolor del cliente, exposición, banca actual…"></textarea></label>
+      <div class="modal-foot full"><span class="revenue-preview" id="revenue-preview"></span><div><button type="button" class="ghost-btn" data-close-modal>Cancelar</button><button type="submit" class="primary-btn">Guardar</button></div></div>
+    </form>
+  </div>
+</div>
+
+<!-- Modal actividad -->
+<div class="modal-overlay hidden" id="modal-activity">
+  <div class="modal small">
+    <div class="modal-head"><h2>Registrar actividad</h2><button class="icon-btn" data-close-modal>✕</button></div>
+    <form id="form-activity" class="modal-body">
+      <input type="hidden" name="prospectId" />
+      <label>Tipo<select name="tipo"><option>Llamada</option><option>Email</option><option>WhatsApp</option><option>Reunión</option><option>Cotización</option><option>Propuesta</option><option>Nota</option></select></label>
+      <label>Fecha<input name="fecha" type="date" /></label>
+      <label>Detalle<textarea name="nota" rows="3" placeholder="Qué se habló / acordó"></textarea></label>
+      <label>Próxima acción<input name="proximaAccion" placeholder="Siguiente paso" /></label>
+      <label>Fecha próxima acción<input name="fechaProxima" type="date" /></label>
+      <div class="modal-foot"><button type="button" class="ghost-btn" data-close-modal>Cancelar</button><button type="submit" class="primary-btn">Guardar</button></div>
+    </form>
+  </div>
+</div>
+
+<!-- Modal producto -->
+<div class="modal-overlay hidden" id="modal-product">
+  <div class="modal small">
+    <div class="modal-head"><h2 id="modal-product-title">Nuevo producto</h2><button class="icon-btn" data-close-modal>✕</button></div>
+    <form id="form-product" class="modal-body">
+      <input type="hidden" name="id" />
+      <label>Nombre *<input name="nombre" required placeholder="Ej. Coberturas cambiarias (Forwards)" /></label>
+      <label>Categoría<select name="categoria"><option>Divisas (FX)</option><option>Derivados de tasa</option><option>Commodities</option><option>Inversiones / Renta fija</option><option>Pagos & Transferencias</option><option>Estructurados</option><option>Otro</option></select></label>
+      <label>Proveedor<input name="prov" placeholder="Marex · StoneX · ADM · Bursamétrica" /></label>
+      <label>Descripción<textarea name="desc" rows="2" placeholder="Qué resuelve para el cliente"></textarea></label>
+      <label>Perfil ideal<input name="ideal" placeholder="Para qué tipo de cliente" /></label>
+      <div class="modal-foot"><button type="button" class="ghost-btn" data-close-modal>Cancelar</button><button type="submit" class="primary-btn">Guardar</button></div>
+    </form>
+  </div>
+</div>
+
+<!-- Modal industria -->
+<div class="modal-overlay hidden" id="modal-industry">
+  <div class="modal small">
+    <div class="modal-head"><h2 id="modal-industry-title">Nueva industria</h2><button class="icon-btn" data-close-modal>✕</button></div>
+    <form id="form-industry" class="modal-body">
+      <input type="hidden" name="orig" />
+      <label>Nombre de la industria *<input name="name" required placeholder="Ej. Manufactura/Automotriz" /></label>
+      <label>Variables de mercado relevantes (para sus notas)<div class="chips" id="chips-vars"></div></label>
+      <label>Mensaje / enfoque de la nota<textarea name="tip" rows="2" placeholder="Ej. Exposición a turbosina; evaluar cobertura de energéticos."></textarea></label>
+      <div class="modal-foot"><button type="button" class="ghost-btn" data-close-modal>Cancelar</button><button type="submit" class="primary-btn">Guardar</button></div>
+    </form>
+  </div>
+</div>
+
+<!-- Modal agendar cita (Outlook / Google) -->
+<div class="modal-overlay hidden" id="modal-schedule">
+  <div class="modal small">
+    <div class="modal-head"><h2>Agendar cita</h2><button class="icon-btn" data-close-modal>✕</button></div>
+    <form id="form-schedule" class="modal-body">
+      <input type="hidden" name="prospectId" />
+      <label>Asunto *<input name="asunto" required placeholder="Reunión con [Empresa] — diagnóstico de exposición" /></label>
+      <label>Fecha *<input name="fecha" type="date" required /></label>
+      <div class="grid2" style="display:grid;grid-template-columns:1fr 1fr;gap:13px">
+        <label>Hora inicio<input name="hora" type="time" value="10:00" /></label>
+        <label>Duración<select name="dur"><option value="30">30 min</option><option value="60" selected>1 hora</option><option value="90">1.5 horas</option><option value="120">2 horas</option></select></label>
+      </div>
+      <label>Lugar / liga<input name="lugar" placeholder="Oficina, Teams, Google Meet, teléfono…" /></label>
+      <label>Notas<textarea name="notas" rows="2" placeholder="Agenda de la reunión"></textarea></label>
+      <div class="modal-foot" style="flex-wrap:wrap;gap:8px">
+        <button type="button" class="primary-btn" id="sch-ics">⤓ Descargar para Outlook (.ics)</button>
+        <a class="ghost-btn" id="sch-outlook" target="_blank">Outlook web</a>
+        <a class="ghost-btn" id="sch-google" target="_blank">Google Calendar</a>
+      </div>
+      <p class="hint">El archivo .ics abre directo en Outlook de escritorio. Al agendar se registra como actividad del cliente.</p>
+    </form>
+  </div>
+</div>
+
+<!-- Modal mover etapa (seguimiento real) -->
+<div class="modal-overlay hidden" id="modal-move">
+  <div class="modal">
+    <div class="modal-head"><h2 id="move-title">Mover cliente</h2><button class="icon-btn" data-close-modal>✕</button></div>
+    <form id="form-move" class="modal-body">
+      <input type="hidden" name="prospectId" /><input type="hidden" name="etapa" />
+      <label>¿Qué hiciste? *<textarea name="quehiciste" rows="2" required placeholder="Ej. Llamé a la tesorera, expliqué coberturas, mostró interés en forwards"></textarea></label>
+      <label>¿Cómo lo contactaste?<select name="canal"><option>Llamada</option><option>WhatsApp</option><option>Email</option><option>Reunión</option><option>LinkedIn</option><option>Presencial</option><option>Otro</option></select></label>
+      <label class="chk"><input type="checkbox" name="genreunion" id="move-reunion" /> <span>Generó una reunión / cita (la amarro a tu calendario)</span></label>
+      <div id="move-reunion-fields" class="hidden move-block">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px"><label>Fecha<input name="rfecha" type="date" /></label><label>Hora<input name="rhora" type="time" value="10:00" /></label></div>
+        <label>Lugar / liga (Teams, Meet, oficina…)<input name="rlugar" placeholder="Teams / Google Meet / oficina / teléfono" /></label>
+      </div>
+      <div id="move-won-fields" class="hidden move-block">
+        <h4 class="move-sub">💰 Datos de la operación ganada</h4>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <label>Producto operado<input name="wproducto" placeholder="Forward USD/MXN" /></label>
+          <label>Volumen (USD)<input name="wvolumen" type="number" placeholder="500000" /></label>
+          <label>Nivel / tipo de cambio<input name="wnivel" placeholder="17.35" /></label>
+          <label>Ganancia / comisión (USD) *<input name="wganancia" type="number" placeholder="1500" /></label>
+          <label>Fecha de operación<input name="wfecha" type="date" /></label>
+        </div>
+      </div>
+      <label>Próxima acción<input name="proximaAccion" placeholder="Siguiente paso" /></label>
+      <label>Fecha próxima acción<input name="fechaProxima" type="date" /></label>
+      <div class="modal-foot"><span id="move-hint" class="muted" style="font-size:11.5px"></span><div><button type="button" class="ghost-btn" data-close-modal>Cancelar</button><button type="submit" class="primary-btn">Guardar y mover</button></div></div>
+    </form>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<!-- Supabase (solo se usa si configuras la nube en config.js) -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="assets/config.js"></script>
+<script src="assets/db.js"></script>
+<script src="assets/base-datos.js"></script><!-- base local de clientes (no se sube a GitHub); puede no existir -->
+<script src="assets/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+# Datos reales: JAMAS en este repo publico
+assets/base-datos.js
+Base de datos/
+Presentaci*/
+*.xls
+*.xlsx
+*respaldo*.json
+clientes-*.csv
+PLAN_DE_CIERRE.md
+_*.ps1
+_*.txt

@@ -1,0 +1,46 @@
+{
+  "prospects": [
+    {
+      "id": "ejemplo1",
+      "empresa": "Aceros del Bajío SA",
+      "contacto": "Laura Méndez",
+      "puesto": "Tesorera",
+      "telefono": "+52 477 000 0000",
+      "email": "lmendez@acerosbajio.mx",
+      "fuente": "Referido",
+      "segmento": "Manufactura/Automotriz",
+      "etapa": "Propuesta",
+      "productos": ["cobertura", "fxspot"],
+      "notional": 8000000,
+      "feeBps": 25,
+      "probabilidad": 75,
+      "proximaAccion": "Enviar collar a costo cero",
+      "fechaProxima": "2026-06-02",
+      "notas": "Importa acero de EE.UU., paga USD mensual. Banca actual le cobra spread alto.",
+      "creado": "2026-05-31",
+      "actividades": []
+    },
+    {
+      "id": "ejemplo2",
+      "empresa": "TechPay Fintech",
+      "contacto": "Daniel Cruz",
+      "puesto": "COO",
+      "telefono": "+52 55 000 0000",
+      "email": "dcruz@techpay.mx",
+      "fuente": "Inbound (web)",
+      "segmento": "Fintech/Remesas",
+      "etapa": "Negociación",
+      "productos": ["fxspot"],
+      "notional": 25000000,
+      "feeBps": 12,
+      "probabilidad": 90,
+      "proximaAccion": "Cerrar condiciones de spread",
+      "fechaProxima": "2026-06-01",
+      "notas": "Volumen alto de remesas, busca mejor FX que su proveedor actual.",
+      "creado": "2026-05-31",
+      "actividades": []
+    }
+  ],
+  "notes": [],
+  "meta": { "version": 1, "updated": "2026-05-31T00:00:00.000Z" }
+}
