@@ -1,10 +1,26 @@
-# Netlify — Insitum Capital CRM (sitio estatico, sin build)
+# Netlify — Insitum Capital CRM
+# Sitio 100% estatico (HTML/JS/CSS): NO hay paso de compilacion.
+# Publicar es casi instantaneo y no consume minutos de build del plan gratuito.
+
 [build]
   publish = "."
+  # OPTIMIZACION 1 — saltar el deploy si el push NO toca lo que sirve el sitio.
+  # (documentos .md, scripts .ps1, SQL, etc. no re-publican nada.)
+  # git diff sale 0 = "sin cambios relevantes" -> Netlify cancela el build (no gasta cuota).
+  ignore = "git diff --quiet HEAD^ HEAD -- index.html manifest.json netlify.toml assets/"
 
-# La app es una sola pagina; nada que compilar.
+# OPTIMIZACION 2 — caché con revalidacion:
+# el navegador NO re-descarga si el archivo no cambio (respuesta 304, sin cuerpo = ahorra
+# ancho de banda y datos del celular), pero SI ve los cambios en cuanto republicamos.
 [[headers]]
   for = "/*"
   [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "strict-origin-when-cross-origin"
+
+# Los iconos de la app casi nunca cambian: se cachean 1 semana (menos descargas en el cel).
+[[headers]]
+  for = "/assets/icon-*.png"
+  [headers.values]
+    Cache-Control = "public, max-age=604800"
