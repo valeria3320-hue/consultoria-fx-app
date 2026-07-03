@@ -1,0 +1,30 @@
+name: Mantener Supabase despierto
+
+# Mantiene el proyecto Supabase (plan gratuito) activo para que NO se pause.
+# Supabase pausa un proyecto tras ~7 dias sin actividad; este ping cada ~3 dias
+# cuenta como actividad y evita la pausa. Corre en segundos y es gratis.
+#
+# OJO: esto PREVIENE la pausa. Si el proyecto YA esta pausado, un ping no lo
+# despierta: hay que darle "Resume" una vez en el dashboard de Supabase.
+
+on:
+  schedule:
+    - cron: '17 13 */3 * *'   # cada ~3 dias, 13:17 UTC (~7:17 am CDMX)
+  workflow_dispatch: {}         # boton para correrlo a mano desde la pestana Actions
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping al REST de Supabase
+        run: |
+          URL="https://owvbboityzjezxwlbpaa.supabase.co/rest/v1/crm_states?select=user_id&limit=1"
+          # anon key PUBLICA (la misma que sirve la app; segura de exponer).
+          KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im93dmJib2l0eXpqZXp4d2xicGFhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAyNTU1OTEsImV4cCI6MjA5NTgzMTU5MX0.TXSVONHD-GxLFvWnHVX_X_ULoma6MI6RS6d6vk-GjeI"
+          code=$(curl -s -o /dev/null -w "%{http_code}" "$URL" -H "apikey: $KEY" -H "Authorization: Bearer $KEY")
+          echo "Supabase respondio HTTP $code"
+          if [ "$code" -ge 500 ]; then
+            echo "::error::Supabase devolvio $code — el proyecto puede estar pausado. Entra al dashboard y dale Resume."
+            exit 1
+          fi
+          echo "OK: proyecto despierto."
