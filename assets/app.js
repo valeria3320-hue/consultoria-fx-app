@@ -52,12 +52,88 @@ function migrate(s){
   (s.prospects||[]).forEach(p=>{ if(p.etapa==='Prospecto')p.etapa='Cliente nuevo'; if(p.etapa==='Cliente activo')p.etapa='Cliente recurrente'; p.actividades=p.actividades||[]; p.stageHistory=p.stageHistory||[]; });
   return s;
 }
+let savePending=false, lastPull=0;
 function save(){
   if(!ME) return; state.meta={version:3,updated:new Date().toISOString()};
   if(saveTimer)clearTimeout(saveTimer);
-  saveTimer=setTimeout(()=>{ DB.saveState(ME,state).catch(e=>toast('Error al guardar: '+e.message)); },350);
+  saveTimer=setTimeout(doSave,350);
 }
+async function doSave(){
+  if(!ME||!state) return;
+  if(saveTimer){ clearTimeout(saveTimer); saveTimer=null; }
+  try{
+    await DB.saveState(ME,state);
+    if(savePending){ savePending=false; syncBanner(false); toast('Cambios guardados ✓'); }
+  }catch(e){
+    if(e&&e.code==='CONFLICT'){
+      // Otro dispositivo guardó primero: fusionar sin perder nada y reintentar.
+      try{
+        const cloudState=await DB.loadState(ME);
+        if(cloudState) state=migrate(mergeStates(state,cloudState));
+        await DB.saveState(ME,state);
+        savePending=false; syncBanner(false);
+        render(); toast('Se combinaron cambios de otro dispositivo ✓');
+        return;
+      }catch(e2){ e=e2; }
+    }
+    savePending=true; syncBanner(true);
+  }
+}
+function syncBanner(on){ const b=$('#sync-banner'); if(b)b.classList.toggle('hidden',!on); }
+window.addEventListener('online',()=>{ if(savePending)doSave(); });
+setInterval(()=>{ if(savePending)doSave(); },20000);
 function flushSave(){ if(ME&&state){ if(saveTimer)clearTimeout(saveTimer); DB.saveState(ME,state).catch(()=>{}); } }
+
+// Fusión de dos versiones de la cartera (este dispositivo vs nube): gana la más
+// reciente en campos generales, pero clientes, actividades y notas se UNEN — nada se pierde.
+function mergeStates(a,b){
+  const newer=(new Date((a.meta&&a.meta.updated)||0)>=new Date((b.meta&&b.meta.updated)||0))?a:b;
+  const older=(newer===a)?b:a;
+  const out=JSON.parse(JSON.stringify(newer));
+  out.prospects=out.prospects||[];
+  const byId=new Map(out.prospects.map(p=>[p.id,p]));
+  (older.prospects||[]).forEach(p=>{
+    const q=byId.get(p.id);
+    if(!q){ out.prospects.push(p); return; }
+    q.actividades=q.actividades||[]; q.stageHistory=q.stageHistory||[];
+    const aid=new Set(q.actividades.map(x=>x.id));
+    (p.actividades||[]).forEach(x=>{ if(!aid.has(x.id))q.actividades.push(x); });
+    const sh=new Set(q.stageHistory.map(x=>JSON.stringify(x)));
+    (p.stageHistory||[]).forEach(x=>{ if(!sh.has(JSON.stringify(x)))q.stageHistory.push(x); });
+  });
+  out.notes=out.notes||[];
+  const nid=new Set(out.notes.map(n=>n.id));
+  ((older.notes)||[]).forEach(n=>{ if(!nid.has(n.id))out.notes.push(n); });
+  return out;
+}
+
+// Al volver a la app (cambio de pestaña / desbloquear el cel), bajar cambios de la nube.
+async function pullIfStale(){
+  if(!DB.cloud||!ME||!state) return;
+  if(saveTimer||savePending) return;                 // hay cambios locales en vuelo
+  if(Date.now()-lastPull<30000) return; lastPull=Date.now();
+  try{
+    const remote=await DB.cloudRev(ME);
+    if(DB.isNewer(remote)){
+      const cs=await DB.loadState(ME);
+      if(cs){ state=migrate(mergeStates(state,cs)); render(); toast('Datos actualizados desde la nube ✓'); }
+    }
+  }catch(e){}
+}
+document.addEventListener('visibilitychange',()=>{ if(!document.hidden)pullIfStale(); });
+window.addEventListener('focus',pullIfStale);
+
+// Errores técnicos -> español claro (para un operador no técnico).
+function errMsg(e){
+  const m=(e&&e.message)||'';
+  if(/invalid login credentials/i.test(m)) return 'Correo o contraseña incorrectos';
+  if(/email not confirmed/i.test(m)) return 'Tu correo no está confirmado. Avísale al administrador.';
+  if(/failed to fetch|networkerror|load failed|network request/i.test(m)) return 'Sin internet. Revisa tu conexión e intenta de nuevo.';
+  if(/rate limit|too many/i.test(m)) return 'Demasiados intentos. Espera un minuto y vuelve a probar.';
+  if(/at least 6|password should/i.test(m)) return 'La contraseña debe tener al menos 6 caracteres.';
+  if(/user not found|usuario no encontrado/i.test(m)) return 'Ese usuario no existe. Revisa el correo.';
+  return m||'Algo falló. Intenta de nuevo.';
+}
 function uid(){ return 'p'+Math.random().toString(36).slice(2,9)+Date.now().toString(36).slice(-3); }
 
 /* ---------- Utilidades ---------- */
@@ -118,11 +194,14 @@ function showLogin(){
   $('#lbl-email').classList.toggle('hidden',demo);
   $('#lbl-pass').classList.toggle('hidden',demo);
   if(demo){ $('#demo-user-select').innerHTML = DB.demoUsers().map(u=>`<option value="${esc(u.email)}">${esc(u.nombre)} — ${esc(u.email)}</option>`).join(''); }
+  // Nube: pre-llenar el último correo usado (menos teclado para el operador).
+  if(!demo){ const last=localStorage.getItem('cfx_last_email'); if(last)$('#form-login').email.value=last; }
+  const fg=$('#btn-forgot'); if(fg)fg.classList.toggle('hidden',demo);
   $('#login').classList.remove('hidden'); $('#app').classList.add('hidden');
 }
 async function afterLogin(user){
   ME=user;
-  let loaded=null; try{ loaded=await DB.loadState(user); }catch(e){ toast('Error al cargar: '+e.message); }
+  let loaded=null; try{ loaded=await DB.loadState(user); }catch(e){ toast('Error al cargar: '+errMsg(e)); }
   state = loaded? migrate(loaded) : seedData();
   await DB.saveState(user,state).catch(()=>{});
   startApp();
@@ -1098,8 +1177,17 @@ function init(){
     e.preventDefault(); const f=e.target; const d=Object.fromEntries(new FormData(f).entries());
     const email = DB.cloud ? d.email : d.demoUser;
     const errEl=$('#login-error'); errEl.classList.add('hidden');
-    try{ const user=await DB.signIn(email,d.password); await afterLogin(user); }
-    catch(err){ errEl.textContent=err.message||'No se pudo iniciar sesión'; errEl.classList.remove('hidden'); }
+    try{ const user=await DB.signIn(email,d.password); localStorage.setItem('cfx_last_email',email||''); await afterLogin(user); }
+    catch(err){ errEl.textContent=errMsg(err); errEl.classList.remove('hidden'); }
+  };
+  // Ojito: ver/ocultar la contraseña mientras se escribe.
+  const eye=$('#btn-eye'); if(eye)eye.onclick=()=>{ const i=$('#form-login').password; i.type=(i.type==='password')?'text':'password'; eye.textContent=(i.type==='password')?'👁':'🙈'; i.focus(); };
+  // ¿Olvidó la contraseña? Se manda un correo con la liga para ponerla de nuevo.
+  const fg=$('#btn-forgot'); if(fg)fg.onclick=async()=>{
+    const email=($('#form-login').email.value||'').trim();
+    if(!email){ toast('Primero escribe tu correo arriba'); $('#form-login').email.focus(); return; }
+    try{ await DB.resetPassword(email); toast('Listo: te mandamos un correo para restablecerla ✓'); }
+    catch(e){ toast('No se pudo: '+errMsg(e)); }
   };
   DB.currentUser().then(user=>{ if(user) afterLogin(user); else showLogin(); }).catch(()=>showLogin());
 }

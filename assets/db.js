@@ -9,14 +9,37 @@ window.DB = (function(){
   let sb = null;
   if (cloud) sb = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
 
+  // Candado multi-dispositivo: marca de tiempo de la última lectura de la nube.
+  // Si otro dispositivo guardó después, saveState avisa (CONFLICT) en vez de pisar.
+  let rev = null;
+
+  // Recuperación de contraseña: al entrar por la liga del correo, pedir la nueva.
+  if (cloud) sb.auth.onAuthStateChange((ev)=>{
+    if (ev === 'PASSWORD_RECOVERY'){
+      const np = window.prompt('Escribe tu NUEVA contraseña (mínimo 6 letras o números):');
+      if (np) sb.auth.updateUser({ password: np }).then(({ error })=>{
+        window.alert(error ? 'No se pudo cambiar: ' + error.message : 'Contraseña cambiada ✓ Ya puedes usarla la próxima vez.');
+      });
+    }
+  });
+
   const lc = s => (s||'').toString().trim().toLowerCase();
   const isAdmin = email => (cfg.ADMIN_EMAILS||[]).map(lc).includes(lc(email));
   const demoUsers = () => cfg.DEMO_USERS || [];
   const KEY = email => 'cfx_state_v3_' + lc(email);
 
+  async function cloudRev(user){
+    if (!cloud) return null;
+    const { data, error } = await sb.from('crm_states').select('updated_at').eq('user_id', user.id).maybeSingle();
+    if (error) throw new Error(error.message);
+    return data ? data.updated_at : null;
+  }
+
   return {
-    cloud, isAdmin, demoUsers,
+    cloud, isAdmin, demoUsers, cloudRev,
     mode(){ return cloud ? 'nube' : 'demo'; },
+    // ¿La nube tiene una versión más nueva que la última que leímos aquí?
+    isNewer(remote){ return !!(cloud && remote && remote !== rev); },
 
     async currentUser(){
       if (cloud){
@@ -44,10 +67,17 @@ window.DB = (function(){
       else localStorage.removeItem('cfx_demo_user');
     },
 
+    async resetPassword(email){
+      if (!cloud) throw new Error('Disponible solo en modo nube');
+      const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
+      if (error) throw new Error(error.message);
+    },
+
     async loadState(user){
       if (cloud){
-        const { data, error } = await sb.from('crm_states').select('data').eq('user_id', user.id).maybeSingle();
+        const { data, error } = await sb.from('crm_states').select('data,updated_at').eq('user_id', user.id).maybeSingle();
         if (error) throw new Error(error.message);
+        rev = data ? data.updated_at : null;
         return data ? data.data : null;
       }
       const raw = localStorage.getItem(KEY(user.email));
@@ -56,10 +86,15 @@ window.DB = (function(){
 
     async saveState(user, state){
       if (cloud){
+        // Candado: si la nube cambió desde nuestra última lectura, NO pisar (la app fusiona).
+        const remote = await cloudRev(user);
+        if (remote && remote !== rev){ const e = new Error('La nube tiene cambios más recientes'); e.code = 'CONFLICT'; throw e; }
+        const stamp = new Date().toISOString();
         const { error } = await sb.from('crm_states').upsert(
-          { user_id:user.id, email:user.email, data:state, updated_at:new Date().toISOString() },
+          { user_id:user.id, email:user.email, data:state, updated_at:stamp },
           { onConflict:'user_id' });
         if (error) throw new Error(error.message);
+        rev = stamp;
       } else {
         localStorage.setItem(KEY(user.email), JSON.stringify(state));
       }

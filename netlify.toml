@@ -1,0 +1,10 @@
+# Netlify — Insitum Capital CRM (sitio estatico, sin build)
+[build]
+  publish = "."
+
+# La app es una sola pagina; nada que compilar.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"

@@ -398,3 +398,12 @@ label.chk input{width:auto}
 /* Los items de los grids de layout no deben crecer al contenido (selects con nombres largos) */
 .notes-layout>*,.cols2>*{min-width:0}
 label>select{width:100%}
+
+/* Login: ojito de contraseña + liga de recuperación */
+.pass-wrap{position:relative;display:block}
+.pass-wrap input{width:100%;padding-right:46px}
+.eye-btn{position:absolute;right:2px;top:50%;transform:translateY(-50%);background:none;border:0;font-size:17px;cursor:pointer;padding:8px;min-width:40px;min-height:40px;color:var(--muted)}
+.linklike{background:none;border:0;color:var(--accent);cursor:pointer;font-size:13px;padding:8px 0;text-decoration:underline;width:100%;text-align:center}
+
+/* Aviso fijo: sin conexión / cambios sin guardar (no desaparece solo, a diferencia del toast) */
+.sync-banner{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#4a2508;color:#ffd9a8;border:1px solid var(--amber);padding:11px 20px;border-radius:10px;font-size:13px;font-weight:600;box-shadow:var(--shadow);z-index:100;max-width:92vw;text-align:center}

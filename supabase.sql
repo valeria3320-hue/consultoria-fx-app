@@ -27,9 +27,10 @@ create policy "own_update" on public.crm_states
   for update using (auth.uid() = user_id);
 
 -- El ADMIN (por correo) puede VER la cartera de todos -----------------------
--- ⚠️ Cambia el correo por el del socio administrador real.
+-- Debe coincidir con ADMIN_EMAILS de assets/config.js.
+-- Para varios admins: ('admin1@correo.com','admin2@correo.com')
 drop policy if exists "admin_select_all" on public.crm_states;
 create policy "admin_select_all" on public.crm_states
-  for select using ( (auth.jwt() ->> 'email') in ('socio2@insitum.mx') );
+  for select using ( (auth.jwt() ->> 'email') in ('valeria3320@gmail.com') );
 
 -- Listo. Ahora crea los usuarios en Authentication → Users → Add user.

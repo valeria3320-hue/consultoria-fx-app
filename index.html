@@ -23,8 +23,9 @@
         <select name="demoUser" id="demo-user-select"></select>
       </label>
       <label id="lbl-email">Correo<input name="email" type="email" placeholder="tucorreo@insitum.mx" autocomplete="username" /></label>
-      <label id="lbl-pass">Contraseña<input name="password" type="password" placeholder="••••••••" autocomplete="current-password" /></label>
+      <label id="lbl-pass">Contraseña<span class="pass-wrap"><input name="password" type="password" placeholder="••••••••" autocomplete="current-password" /><button type="button" id="btn-eye" class="eye-btn" aria-label="Ver contraseña">👁</button></span></label>
       <button type="submit" class="primary-btn login-btn">Entrar</button>
+      <button type="button" id="btn-forgot" class="linklike hidden">¿Olvidaste tu contraseña?</button>
       <p id="login-error" class="login-error hidden"></p>
     </form>
     <p class="login-foot">🔒 Cada socio entra a su propia cartera. El administrador ve la de todos.</p>
@@ -214,6 +215,7 @@
 </div>
 
 <div id="toast" class="toast hidden"></div>
+<div id="sync-banner" class="sync-banner hidden">⚠️ Sin conexión — tus cambios NO se han guardado. Reintentando… no cierres la app.</div>
 
 <!-- Supabase (solo se usa si configuras la nube en config.js) -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
