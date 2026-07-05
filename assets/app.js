@@ -41,7 +41,7 @@ const COT_TIPOS = {
 
 /* ---------- Estado / sesión ---------- */
 let state, ME=null, saveTimer=null;
-let ui = { view:'midia', search:'', filtroSeg:'', filtroProd:'', filtroEtapa:'', filtroDatos:'', noteFmt:'whatsapp', noteModo:'apertura', noteAlcance:'industria', noteIndustria:'', cotTipo:'ahorro', cotCliente:'', cotText:'', perfCliente:'', perfText:'', perfData:null };
+let ui = { view:'midia', search:'', filtroSeg:'', filtroProd:'', filtroEtapa:'', filtroDatos:'', noteFmt:'whatsapp', noteModo:'apertura', noteAlcance:'industria', noteIndustria:'', cotTipo:'ahorro', cotCliente:'', cotText:'', perfCliente:'', perfText:'', perfData:null, propJugada:'fx_importador', propCliente:'', propText:'', propData:null };
 
 function migrate(s){
   if(!s.brand) s.brand='Insitum Capital';
@@ -239,9 +239,9 @@ function render(){
   $$('.view').forEach(v=>v.classList.add('hidden'));
   $('#view-'+ui.view).classList.remove('hidden');
   $$('.nav-btn').forEach(b=>b.classList.toggle('active',b.dataset.view===ui.view));
-  const titles={midia:['Mi Día','Tu plan de acción de hoy'],resumen:['Resumen','Salud de tu cartera'],pipeline:['Pipeline','Arrastra clientes por la cadena'],clientes:['Clientes','CRM: ficha completa'],cotizador:['Cotizador','Calcula y envía cotizaciones'],perfilador:['Perfilador','Califica prospectos en 2 minutos: exposición, dolor y decisión'],seguimiento:['Seguimiento','Tu agenda de acciones'],notas:['Notas de mercado','Apertura y cierre por industria'],productos:['Productos','Catálogo editable'],equipo:['Equipo','Cartera consolidada de socios'],playbook:['Playbook','Metodología'],ajustes:['Ajustes','Marca, industrias y datos']};
+  const titles={midia:['Mi Día','Tu plan de acción de hoy'],resumen:['Resumen','Salud de tu cartera'],pipeline:['Pipeline','Arrastra clientes por la cadena'],clientes:['Clientes','CRM: ficha completa'],propuestas:['Propuestas','Genera una propuesta de valor en segundos'],cotizador:['Cotizador','Calcula y envía cotizaciones'],perfilador:['Perfilador','Califica prospectos en 2 minutos: exposición, dolor y decisión'],seguimiento:['Seguimiento','Tu agenda de acciones'],notas:['Notas de mercado','Apertura y cierre por industria'],productos:['Productos','Catálogo editable'],equipo:['Equipo','Cartera consolidada de socios'],playbook:['Playbook','Metodología'],ajustes:['Ajustes','Marca, industrias y datos']};
   $('#view-title').textContent=titles[ui.view][0]; $('#view-sub').textContent=titles[ui.view][1];
-  ({midia:renderMiDia,resumen:renderResumen,pipeline:renderPipeline,clientes:renderClientes,cotizador:renderCotizador,perfilador:renderPerfilador,seguimiento:renderSeguimiento,notas:renderNotas,productos:renderProductos,equipo:renderEquipo,playbook:renderPlaybook,ajustes:renderAjustes}[ui.view])();
+  ({midia:renderMiDia,resumen:renderResumen,pipeline:renderPipeline,clientes:renderClientes,propuestas:renderPropuestas,cotizador:renderCotizador,perfilador:renderPerfilador,seguimiento:renderSeguimiento,notas:renderNotas,productos:renderProductos,equipo:renderEquipo,playbook:renderPlaybook,ajustes:renderAjustes}[ui.view])();
 }
 
 /* ---------- MI DÍA (buenos días + pasos por temporalidad) ---------- */
@@ -727,6 +727,321 @@ function buildQuote(tipo,d,cliente){
     body=`*Inversión / Rendimiento*\n• Monto: ${money(m,'')}\n• Tasa anual: ${num(t,2)}%  ·  Plazo: ${num(dias)} días\n\n📈 *Rendimiento estimado: ${money(rend,'')}*\n💼 Monto final: ${money(fin,'')}`;
   }
   return head+'\n'+body+'\n\nQuedo a tus órdenes para operarlo.\n— Mesa de '+brand()+foot;
+}
+
+/* ===========================================================================
+   GENERADOR DE PROPUESTAS — biblioteca de "jugadas" por tipo de exposicion.
+   Con poca informacion (2-4 datos) arma un diagnostico + 2 formas de cubrir +
+   por que ahora + economia + comision. Salidas: ficha WhatsApp y 1-pager PDF.
+   Reusa el motor existente (mercado en vivo, productos, industrias).
+   =========================================================================== */
+const JUGADAS = {
+  fx_importador:{
+    label:'FX · Importador (paga en dólares)', icon:'💵',
+    segmentos:['Importador/Exportador','Manufactura/Automotriz','Retail/Comercio','Construcción/Inmobiliaria','Energía/Combustibles','Fintech/Remesas'],
+    inputs:[
+      {k:'vol',label:'Pagos/compras en USD al año',ph:'2000000'},
+      {k:'spot',label:'USD/MXN de referencia',ph:'18.50',step:'0.0001',mkt:'usdmxn'},
+      {k:'adverso',label:'Alza del dólar a simular (%)',ph:'8'},
+      {k:'cubrir',label:'% que quieres cubrir',ph:'70'},
+    ],
+    build(d,mk){
+      const vol=+d.vol||0, spot=+d.spot||+mk.usdmxn||0, adv=+d.adverso||8, cub=+d.cubrir||70;
+      const expMXN=vol*spot, riesgo=vol*spot*adv/100, volCub=vol*cub/100, fee=vol*25/10000;
+      return {
+        titulo:'Cobertura cambiaria — pagos en dólares',
+        situacion:`La empresa paga cerca de ${fmtUSD(vol)} al año en dólares. Cada movimiento del tipo de cambio le pega directo al costo y al margen.`,
+        exposicion:[['Pagos en USD / año',fmtUSD(vol)],['Exposición en pesos',money(expMXN,'MXN')],[`Sobrecosto si el USD sube ${num(adv,0)}%`,money(riesgo,'MXN')+' / año'],['A cubrir en esta propuesta',`${fmtUSD(volCub)} (${num(cub,0)}%)`]],
+        formas:[
+          {n:'Forward escalonado',como:'Fija hoy el tipo de cambio de tus pagos futuros, repartido por vencimientos.',da:'Elimina por completo la incertidumbre del monto cubierto.',costo:'Sin prima; el costo va en los puntos forward (diferencial de tasas MXN–USD).'},
+          {n:'Collar a costo cero',como:'Pones un techo a tu tipo de cambio y, a cambio, cedes si baja de un piso.',da:'Te protege de las alzas sin pagar prima.',costo:'Costo cero de prima.'},
+        ],
+        porque: mk.usdmxn?`El USD/MXN está en ${num(spot,4)}. A estos niveles, fijar o poner techo protege el presupuesto del año.`:`Una sola alza fuerte del dólar borra el margen del año. Conviene fijar o poner techo antes del próximo movimiento.`,
+        eco:`Comisión estimada (25 pb sobre nocional): ${fmtUSD(fee)} / año`,
+      };
+    }},
+  fx_exportador:{
+    label:'FX · Exportador (cobra en dólares)', icon:'💱',
+    segmentos:['Importador/Exportador','Agroindustria','Minería/Metales','Fintech/Remesas','Manufactura/Automotriz'],
+    inputs:[
+      {k:'vol',label:'Cobros en USD al año',ph:'3000000'},
+      {k:'spot',label:'USD/MXN de referencia',ph:'18.50',step:'0.0001',mkt:'usdmxn'},
+      {k:'adverso',label:'Baja del dólar a simular (%)',ph:'8'},
+      {k:'cubrir',label:'% que quieres cubrir',ph:'60'},
+    ],
+    build(d,mk){
+      const vol=+d.vol||0, spot=+d.spot||+mk.usdmxn||0, adv=+d.adverso||8, cub=+d.cubrir||60;
+      const expMXN=vol*spot, riesgo=vol*spot*adv/100, volCub=vol*cub/100, fee=vol*25/10000;
+      return {
+        titulo:'Cobertura cambiaria — ingresos en dólares',
+        situacion:`La empresa factura cerca de ${fmtUSD(vol)} al año en dólares pero sus costos son en pesos. Si el dólar baja, su ingreso en pesos se contrae.`,
+        exposicion:[['Cobros en USD / año',fmtUSD(vol)],['Ingreso en pesos',money(expMXN,'MXN')],[`Menor ingreso si el USD baja ${num(adv,0)}%`,money(riesgo,'MXN')+' / año'],['A cubrir en esta propuesta',`${fmtUSD(volCub)} (${num(cub,0)}%)`]],
+        formas:[
+          {n:'Forward de venta',como:'Fija hoy el tipo de cambio al que venderás tus dólares futuros.',da:'Asegura tu ingreso en pesos del monto cubierto.',costo:'Sin prima; se opera en los puntos forward.'},
+          {n:'Collar a costo cero',como:'Aseguras un piso de tipo de cambio cediendo por arriba de un techo.',da:'Protege tu ingreso mínimo sin pagar prima.',costo:'Costo cero de prima.'},
+        ],
+        porque: mk.usdmxn?`El USD/MXN está en ${num(spot,4)}. Es un buen nivel para asegurar el ingreso en pesos del año.`:`Un peso más fuerte reduce tu ingreso sin que vendas menos. Asegurar un piso protege el presupuesto.`,
+        eco:`Comisión estimada (25 pb sobre nocional): ${fmtUSD(fee)} / año`,
+      };
+    }},
+  combustible:{
+    label:'Combustible (jet fuel / diésel)', icon:'✈️',
+    segmentos:['Aerolínea/Transporte','Energía/Combustibles'],
+    inputs:[
+      {k:'consumo',label:'Consumo al año (galones o barriles)',ph:'5000000'},
+      {k:'precio',label:'Precio de referencia (USD/unidad)',ph:'2.60',step:'0.01'},
+      {k:'adverso',label:'Alza del energético a simular (%)',ph:'15'},
+      {k:'cubrir',label:'% a cubrir',ph:'50'},
+    ],
+    build(d,mk){
+      const con=+d.consumo||0, pr=+d.precio||0, adv=+d.adverso||15, cub=+d.cubrir||50;
+      const costo=con*pr, riesgo=costo*adv/100, costoCub=costo*cub/100, fee=costo*25/10000;
+      return {
+        titulo:'Cobertura de combustible',
+        situacion:`El combustible es una de las mayores partidas de costo (~${fmtUSD(costo)} al año). Un alza del crudo golpea el resultado operativo de inmediato.`,
+        exposicion:[['Consumo anual',`${num(con)} unidades`],['Costo anual de combustible',fmtUSD(costo)],[`Sobrecosto si sube ${num(adv,0)}%`,fmtUSD(riesgo)+' / año'],['A cubrir en esta propuesta',`${fmtUSD(costoCub)} (${num(cub,0)}%)`]],
+        formas:[
+          {n:'Call spread (techo con prima acotada)',como:'Compras un call y financias parte vendiendo otro más arriba: fijas un techo de precio pagando una prima reducida.',da:'Te protege de alzas fuertes con desembolso controlado; sigues beneficiándote si el precio baja.',costo:'Prima neta reducida (la venta del call superior abarata la compra).'},
+          {n:'Collar / piso-techo a costo cero',como:'Pones un techo al precio y cedes si el crudo baja de un piso.',da:'Protección total de alzas sin pagar prima.',costo:'Costo cero de prima.'},
+        ],
+        porque: (mk.brent||mk.wti)?`Referencia hoy: ${mk.brent?('Brent '+num(mk.brent,2)):('WTI '+num(mk.wti,2))} USD. Fijar un techo a estos niveles acota el riesgo del presupuesto de vuelo/ruta.`:`El crudo es de los precios más volátiles; un techo protege el costo por vuelo/ruta sin renunciar del todo a las bajas.`,
+        eco:`Comisión estimada (25 pb sobre nocional): ${fmtUSD(fee)} / año`,
+      };
+    }},
+  metales:{
+    label:'Metales (cobre, aluminio)', icon:'🔩',
+    segmentos:['Manufactura/Automotriz','Minería/Metales','Construcción/Inmobiliaria'],
+    inputs:[
+      {k:'metal',label:'Metal',ph:'Cobre / Aluminio',type:'text'},
+      {k:'volumen',label:'Volumen anual (unidades)',ph:'500'},
+      {k:'precio',label:'Precio (USD/unidad)',ph:'8500',step:'0.01'},
+      {k:'adverso',label:'Alza a simular (%)',ph:'12'},
+    ],
+    build(d,mk){
+      const met=d.metal||'metal', vol=+d.volumen||0, pr=+d.precio||0, adv=+d.adverso||12;
+      const costo=vol*pr, riesgo=costo*adv/100, fee=costo*25/10000;
+      return {
+        titulo:`Cobertura de ${met.toLowerCase()}`,
+        situacion:`El ${met.toLowerCase()} representa un insumo clave (~${fmtUSD(costo)} al año). Su precio en el mercado internacional se traslada directo al costo.`,
+        exposicion:[['Volumen anual',`${num(vol)} unidades`],['Costo anual del insumo',fmtUSD(costo)],[`Sobrecosto si sube ${num(adv,0)}%`,fmtUSD(riesgo)+' / año']],
+        formas:[
+          {n:'Swap / forward LME',como:'Fijas hoy el precio de tu insumo a los plazos que compras (vía Marex).',da:'Elimina la incertidumbre de precio del volumen cubierto.',costo:'Sin prima; se opera contra la curva del mercado.'},
+          {n:'Collar de precio',como:'Techo al precio a cambio de ceder si el metal baja de un piso.',da:'Protege el costo máximo sin pagar prima.',costo:'Costo cero de prima.'},
+        ],
+        porque: (met.toLowerCase().includes('cobre')&&mk.cobre)?`El cobre está en ${num(mk.cobre,2)} USD/lb. Fijar o poner techo a estos niveles protege el margen.`:(met.toLowerCase().includes('alumin')&&mk.aluminio)?`El aluminio está en ${num(mk.aluminio,0)} USD/t. Buen momento para acotar el costo del insumo.`:`Los metales industriales se mueven con el ciclo global; fijar el precio da certeza al costeo del año.`,
+        eco:`Comisión estimada (25 pb sobre nocional): ${fmtUSD(fee)} / año`,
+      };
+    }},
+  agro:{
+    label:'Agrícolas (granos, café, azúcar)', icon:'🌾',
+    segmentos:['Agroindustria','Retail/Comercio'],
+    inputs:[
+      {k:'grano',label:'Producto',ph:'Maíz / Trigo / Café',type:'text'},
+      {k:'volumen',label:'Volumen anual (unidades)',ph:'100000'},
+      {k:'precio',label:'Precio (USD/unidad)',ph:'5.20',step:'0.01'},
+      {k:'adverso',label:'Movimiento adverso a simular (%)',ph:'15'},
+    ],
+    build(d,mk){
+      const g=d.grano||'grano', vol=+d.volumen||0, pr=+d.precio||0, adv=+d.adverso||15;
+      const valor=vol*pr, riesgo=valor*adv/100, fee=valor*25/10000;
+      return {
+        titulo:`Cobertura de ${g.toLowerCase()}`,
+        situacion:`El precio del ${g.toLowerCase()} define directamente el margen (valor anual ~${fmtUSD(valor)}). Un movimiento adverso en el mercado internacional lo comprime.`,
+        exposicion:[['Volumen anual',`${num(vol)} unidades`],['Valor anual',fmtUSD(valor)],[`Impacto si se mueve ${num(adv,0)}%`,fmtUSD(riesgo)+' / año']],
+        formas:[
+          {n:'Futuros CME',como:'Fijas hoy el precio de compra/venta a plazo (vía StoneX / ADM).',da:'Certeza total de precio para el volumen cubierto.',costo:'Sin prima; margen de garantía en cámara.'},
+          {n:'Opciones (piso o techo)',como:'Productor: piso de venta. Comprador: techo de compra. Pagas una prima por el seguro.',da:'Proteges tu peor escenario conservando el lado favorable.',costo:'Prima de la opción (definida al cotizar).'},
+        ],
+        porque:`Los granos y blandos son estacionales y muy volátiles; fijar precio o poner un piso/techo asegura el margen de la cosecha/insumo.`,
+        eco:`Comisión estimada (25 pb sobre nocional): ${fmtUSD(fee)} / año`,
+      };
+    }},
+  tasa:{
+    label:'Tasa de interés (deuda variable)', icon:'📈',
+    segmentos:['Construcción/Inmobiliaria','Manufactura/Automotriz','Family Office/Patrimonio','Energía/Combustibles'],
+    inputs:[
+      {k:'deuda',label:'Deuda a tasa variable',ph:'50000000'},
+      {k:'tasa',label:'Tasa de referencia actual (%)',ph:'11.25',step:'0.01',mkt:'banxico'},
+      {k:'alza',label:'Alza de tasa a simular (pb)',ph:'150'},
+    ],
+    build(d,mk){
+      const deuda=+d.deuda||0, tasa=+d.tasa||+mk.banxico||0, alza=+d.alza||150;
+      const costoExtra=deuda*alza/10000, fee=deuda*10/10000;
+      return {
+        titulo:'Cobertura de tasa de interés',
+        situacion:`La empresa tiene ${money(deuda,'')} de deuda a tasa variable. Cada alza de tasa encarece el servicio de forma inmediata.`,
+        exposicion:[['Deuda a tasa variable',money(deuda,'')],['Tasa de referencia',num(tasa,2)+'%'],[`Costo extra si sube ${num(alza,0)} pb`,money(costoExtra,'')+' / año']],
+        formas:[
+          {n:'IRS (swap de tasa)',como:'Cambias tu tasa variable por una fija durante la vida de la deuda (vía Marex).',da:'Vuelve predecible el costo financiero; elimina el riesgo de alzas.',costo:'Sin prima; se opera en la tasa fija de mercado.'},
+          {n:'Cap de tasa (techo)',como:'Pones un techo a tu tasa pagando una prima; si sube más, te compensan.',da:'Protege de alzas fuertes conservando el beneficio si la tasa baja.',costo:'Prima del cap (definida al cotizar).'},
+        ],
+        porque: mk.banxico?`Con la tasa de referencia en ${num(tasa,2)}%, fijar o poner techo da certeza al costo financiero del año.`:`Fijar la tasa vuelve predecible el costo de tu deuda y protege el flujo ante alzas.`,
+        eco:`Comisión estimada (10 pb sobre nocional): ${money(fee,'')} / año`,
+      };
+    }},
+  excedentes:{
+    label:'Excedentes de caja (mesa de dinero)', icon:'🏦',
+    segmentos:['Family Office/Patrimonio','Fintech/Remesas','Retail/Comercio','Importador/Exportador'],
+    inputs:[
+      {k:'monto',label:'Excedente de caja a invertir',ph:'20000000'},
+      {k:'tasa',label:'Tasa esperada (%)',ph:'10.50',step:'0.01',mkt:'cetes'},
+      {k:'dias',label:'Plazo (días)',ph:'90'},
+    ],
+    build(d,mk){
+      const monto=+d.monto||0, tasa=+d.tasa||+mk.cetes||0, dias=+d.dias||90;
+      const rend=monto*tasa/100*dias/360;
+      return {
+        titulo:'Rendimiento sobre excedentes de caja',
+        situacion:`La empresa mantiene ${money(monto,'')} de caja ociosa. Bien colocada, ese dinero trabaja sin sacrificar liquidez.`,
+        exposicion:[['Excedente a invertir',money(monto,'')],['Tasa esperada',num(tasa,2)+'%'],['Plazo',num(dias,0)+' días'],['Rendimiento estimado',money(rend,'')]],
+        formas:[
+          {n:'Mesa de dinero (Cetes / bonos)',como:'Colocas la caja en instrumentos gubernamentales a tu plazo (vía Bursamétrica).',da:'Rendimiento competitivo con liquidez y bajo riesgo.',costo:'Sin comisión explícita; el rendimiento es neto de mercado.'},
+          {n:'Reporto gubernamental',como:'Inviertes contra papel gubernamental con recompra pactada.',da:'Máxima seguridad y liquidez a muy corto plazo.',costo:'Diferencial de mercado.'},
+        ],
+        porque: mk.cetes?`Con Cetes en ${num(tasa,2)}%, la caja ociosa puede rendir de inmediato sin comprometer liquidez.`:`Cada día de caja sin invertir es rendimiento que se deja sobre la mesa.`,
+        eco:`Rendimiento estimado del periodo: ${money(rend,'')}`,
+      };
+    }},
+};
+function jugadasSugeridas(seg){ return Object.keys(JUGADAS).filter(k=>JUGADAS[k].segmentos.includes(seg)); }
+function buildPropuestaFicha(o,emp,contacto){
+  const L=['⚡ *PROPUESTA — '+(emp||'(prospecto)')+'*','🗓️ '+fechaLarga()];
+  if(contacto) L.push('Para: '+contacto);
+  L.push('_'+o.titulo+'_','',o.situacion,'','*EXPOSICIÓN*');
+  o.exposicion.forEach(([k,v])=>L.push('· '+k+': '+v));
+  L.push('','*2 FORMAS DE CUBRIRLO*');
+  o.formas.forEach((f,i)=>{ L.push(`${i+1}) *${f.n}*`,'   ↳ '+f.como,'   ✓ '+f.da,'   💲 '+f.costo); });
+  L.push('','*POR QUÉ AHORA*',o.porque,'',o.eco,'','Quedo a tus órdenes para cotizarlo en firme.','— '+brand());
+  L.push('','_Cifras indicativas, sujetas a condiciones de mercado al momento de operar. No constituye recomendación de inversión._');
+  return L.join('\n');
+}
+function propuesta1PagerHTML(o,emp,contacto){
+  const mark=brand().split(/\s+/).map(w=>w[0]).join('').slice(0,2).toUpperCase();
+  const row=([k,v])=>`<tr><td class="k">${esc(k)}</td><td class="v">${esc(v)}</td></tr>`;
+  const forma=(f,i)=>`<div class="forma"><div class="fn"><span class="fnum">${i+1}</span>${esc(f.n)}</div><p><b>Cómo:</b> ${esc(f.como)}</p><p><b>Te da:</b> ${esc(f.da)}</p><p class="fc"><b>Costo:</b> ${esc(f.costo)}</p></div>`;
+  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Propuesta — ${esc(emp||'')} — ${esc(brand())}</title><style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;color:#1b2430;background:#eef2f7;padding:28px 16px;line-height:1.5}
+.sheet{max-width:820px;margin:0 auto;background:#fff;border:1px solid #e4e9f0;border-radius:14px;overflow:hidden;box-shadow:0 8px 28px rgba(30,41,59,.12)}
+.hd{background:linear-gradient(135deg,#0d9488,#0f766e);color:#fff;padding:22px 28px;display:flex;align-items:center;gap:14px}
+.mk{width:46px;height:46px;border-radius:11px;background:rgba(255,255,255,.18);display:grid;place-items:center;font-weight:800;font-size:16px;letter-spacing:.5px}
+.hd h1{font-size:19px;font-weight:800}.hd .sub{font-size:12.5px;opacity:.9}
+.meta{display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;padding:16px 28px;border-bottom:1px solid #e4e9f0;font-size:12.5px;color:#64748b}
+.meta b{color:#1b2430}
+.bd{padding:20px 28px}
+.tt{font-size:16px;font-weight:800;color:#0f766e;margin-bottom:6px}
+.sit{font-size:13.5px;margin-bottom:18px}
+.sec{font-size:11px;font-weight:800;letter-spacing:.8px;text-transform:uppercase;color:#0f766e;border-bottom:1px solid #e4e9f0;padding-bottom:5px;margin:18px 0 10px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+td{padding:7px 0;border-bottom:1px solid #eef2f7;vertical-align:top}
+td.k{color:#64748b}td.v{text-align:right;font-weight:700;font-variant-numeric:tabular-nums}
+.formas{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.forma{border:1px solid #e4e9f0;border-radius:11px;padding:14px;background:#f8fafc}
+.fn{font-weight:800;font-size:13.5px;color:#0f766e;display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.fnum{width:20px;height:20px;border-radius:50%;background:#0f766e;color:#fff;display:grid;place-items:center;font-size:12px;flex:none}
+.forma p{font-size:12px;margin:4px 0}.forma .fc{color:#334155}
+.pq{background:#e3f6f4;border-left:3px solid #0f766e;border-radius:8px;padding:12px 14px;font-size:13px;margin-top:6px}
+.eco{margin-top:14px;font-size:14px;font-weight:800;color:#0f766e}
+.ft{padding:14px 28px;border-top:1px solid #e4e9f0;font-size:10.5px;color:#94a3b8}
+.cta{margin:16px 28px 0;text-align:center}
+.pbtn{background:#0f766e;color:#fff;border:0;border-radius:9px;padding:11px 20px;font-size:14px;font-weight:700;cursor:pointer}
+@media print{body{background:#fff;padding:0}.sheet{border:0;box-shadow:none;border-radius:0;max-width:none}.cta,.pbtn{display:none!important}}
+@media(max-width:600px){.formas{grid-template-columns:1fr}}
+</style></head><body>
+<div class="sheet">
+  <div class="hd"><div class="mk">${esc(mark)}</div><div><h1>${esc(brand())}</h1><div class="sub">Propuesta de cobertura</div></div></div>
+  <div class="meta"><span>Cliente: <b>${esc(emp||'—')}</b>${contacto?(' · '+esc(contacto)):''}</span><span>${esc(fechaLarga())}</span></div>
+  <div class="bd">
+    <div class="tt">${esc(o.titulo)}</div>
+    <p class="sit">${esc(o.situacion)}</p>
+    <div class="sec">Exposición</div>
+    <table>${o.exposicion.map(row).join('')}</table>
+    <div class="sec">Dos formas de cubrirlo</div>
+    <div class="formas">${o.formas.map(forma).join('')}</div>
+    <div class="sec">Por qué ahora</div>
+    <div class="pq">${esc(o.porque)}</div>
+    <div class="eco">${esc(o.eco)}</div>
+  </div>
+  <div class="cta"><button class="pbtn" onclick="window.print()">🖨 Imprimir / Guardar como PDF</button></div>
+  <div class="ft">Cifras indicativas, sujetas a condiciones de mercado al momento de operar. No constituye recomendación de inversión. Elaborado por ${esc(brand())}.</div>
+</div>
+<script>setTimeout(function(){try{window.print()}catch(e){}},350)</script>
+</body></html>`;
+}
+function abrirPropuesta1Pager(){
+  if(!ui.propData){ toast('Primero genera la propuesta'); return; }
+  const {o,emp,contacto}=ui.propData;
+  const w=window.open('','_blank');
+  if(!w){ toast('Permite ventanas emergentes para el PDF'); return; }
+  w.document.write(propuesta1PagerHTML(o,emp,contacto)); w.document.close();
+}
+function renderPropuestas(){
+  const jid=ui.propJugada||'fx_importador', j=JUGADAS[jid];
+  const cli=state.prospects.find(p=>p.id===ui.propCliente);
+  const sug=cli&&cli.segmento?jugadasSugeridas(cli.segmento):[];
+  const m=state.market||{};
+  const fields=j.inputs.map(f=>{
+    const val=(f.mkt&&m[f.mkt])?esc(m[f.mkt]):'';
+    return `<label>${f.label}<input data-prop="${f.k}" type="${f.type||'number'}" ${f.step?`step="${f.step}"`:''} value="${val}" placeholder="${f.ph||''}" /></label>`;
+  }).join('');
+  $('#view-propuestas').innerHTML=`
+    <div class="notes-layout">
+      <div class="panel">
+        <h3>Generar propuesta</h3>
+        <p class="muted" style="margin-top:-4px;font-size:12px">Elige la jugada, pon 2–4 datos y obtienes una propuesta lista: diagnóstico, 2 formas de cubrir, por qué ahora y tu comisión. Los niveles de mercado se rellenan solos desde <b>Notas de mercado</b>.</p>
+        <label>Cliente (opcional)<select id="prop-cliente"><option value="">— Sin asignar —</option>${state.prospects.map(p=>`<option value="${p.id}" ${ui.propCliente===p.id?'selected':''}>${esc(p.empresa)}</option>`).join('')}</select></label>
+        ${sug.length?`<p class="muted" style="font-size:11.5px;margin:2px 0 0">Sugerido para <b>${esc(cli.segmento)}</b>: ${sug.map(k=>JUGADAS[k].label.split(' · ')[0].split(' (')[0]).join(', ')}</p>`:''}
+        <label>Jugada (tipo de exposición)<select id="prop-jugada">${Object.keys(JUGADAS).map(k=>`<option value="${k}" ${jid===k?'selected':''}>${JUGADAS[k].icon} ${JUGADAS[k].label}${sug.includes(k)?'  ★':''}</option>`).join('')}</select></label>
+        <div class="grid2" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:4px">${fields}</div>
+        <button class="primary-btn" id="prop-gen" style="margin-top:14px;width:100%">⚡ Generar propuesta</button>
+      </div>
+      <div class="panel">
+        <h3>Propuesta <button class="copy-mini" id="prop-copy">Copiar</button></h3>
+        <div class="note-output" id="prop-output" style="max-height:420px;overflow:auto">Elige la jugada, llena los datos y presiona <strong>Generar propuesta</strong>.</div>
+        <div class="note-send">
+          <a class="ghost-btn" id="prop-wa" target="_blank">▶ WhatsApp</a>
+          <a class="ghost-btn" id="prop-mail">✉ Correo</a>
+          <button class="ghost-btn" id="prop-pdf">🖨 1-pager (PDF)</button>
+          <button class="ghost-btn" id="prop-save">💾 Guardar en cliente</button>
+        </div>
+      </div>
+    </div>`;
+  $('#prop-cliente').onchange=e=>{
+    ui.propCliente=e.target.value;
+    const p=state.prospects.find(x=>x.id===ui.propCliente);
+    if(p&&p.segmento){ const s=jugadasSugeridas(p.segmento); if(s.length)ui.propJugada=s[0]; }
+    renderPropuestas();
+    if(p&&p.notional){ const vi=$('[data-prop="vol"]')||$('[data-prop="consumo"]')||$('[data-prop="deuda"]')||$('[data-prop="monto"]'); if(vi&&!vi.value)vi.value=p.notional; }
+  };
+  $('#prop-jugada').onchange=e=>{ ui.propJugada=e.target.value; ui.propText=''; ui.propData=null; renderPropuestas(); };
+  const gen=()=>{
+    const d={}; $$('[data-prop]').forEach(i=>d[i.dataset.prop]=i.value);
+    const emp=cli?cli.empresa:''; const contacto=cli?(cli.contacto||''):'';
+    const o=JUGADAS[jid].build(d,m);
+    ui.propText=buildPropuestaFicha(o,emp,contacto);
+    ui.propData={o,emp,contacto,jid,d};
+    $('#prop-output').textContent=ui.propText;
+    $('#prop-wa').href='https://wa.me/?text='+encodeURIComponent(ui.propText);
+    $('#prop-mail').href='mailto:?subject='+encodeURIComponent(brand()+' — Propuesta de cobertura'+(emp?(' · '+emp):''))+'&body='+encodeURIComponent(ui.propText);
+  };
+  $('#prop-gen').onclick=gen;
+  $('#prop-copy').onclick=()=>{ if(!ui.propText)gen(); copy(ui.propText); };
+  $('#prop-pdf').onclick=()=>{ if(!ui.propData)gen(); abrirPropuesta1Pager(); };
+  $('#prop-save').onclick=()=>{
+    if(!ui.propData)gen();
+    const p=state.prospects.find(x=>x.id===ui.propCliente);
+    if(!p){ toast('Elige un cliente para guardar'); return; }
+    p.actividades=p.actividades||[];
+    p.actividades.push({id:uid(),fecha:todayISO(),tipo:'Propuesta',nota:'⚡ Propuesta ('+JUGADAS[ui.propData.jid].label+')\n'+ui.propText});
+    p.actualizado=todayISO();
+    save(); toast('Propuesta guardada en '+p.empresa+' ✓');
+  };
+  if(ui.propData&&ui.propData.jid===jid){
+    $('#prop-output').textContent=ui.propText;
+    $('#prop-wa').href='https://wa.me/?text='+encodeURIComponent(ui.propText);
+    $('#prop-mail').href='mailto:?body='+encodeURIComponent(ui.propText);
+  }
 }
 
 /* ---------- CITAS (Outlook / Google) ---------- */
