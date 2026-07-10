@@ -1399,7 +1399,7 @@ function renderAjustes(){
       <div class="list">${state.industries.map(i=>`<div class="list-item"><div><strong>${esc(i.name)}</strong><div class="meta">${(i.vars||[]).map(v=>MLAB[v]?MLAB[v].label:v).join(' · ')||'—'}</div></div><div class="row-actions"><button class="icon-btn" data-ind-edit="${esc(i.name)}">✎</button><button class="icon-btn" data-ind-del="${esc(i.name)}">🗑</button></div></div>`).join('')}</div></div>
     <div class="panel"><h3>Datos y sesión</h3><div style="display:flex;gap:10px;flex-wrap:wrap">
       <button class="ghost-btn" id="set-export">⤓ Respaldar (JSON)</button><button class="ghost-btn" id="set-import">⤒ Restaurar</button>
-      <button class="ghost-btn" id="set-csv">⇩ Exportar clientes CSV</button><button class="ghost-btn danger" id="set-reset">⟲ Reiniciar a ejemplo</button>
+      <button class="ghost-btn" id="set-csv">⇩ Exportar clientes CSV</button><button class="ghost-btn danger" id="set-reset">⟲ Vaciar y empezar de cero</button>
       <button class="ghost-btn" id="set-logout">⎋ Cerrar sesión</button>
     </div><p class="muted" style="margin-top:10px">Sesión: <strong>${esc(ME.email)}</strong> · Modo <strong>${DB.mode()}</strong>. ${DB.cloud?'Tus datos se sincronizan en la nube.':'Modo demo: respalda seguido.'}</p></div>`;
   $('#set-brand-save').onclick=()=>{state.brand=$('#set-brand').value.trim()||'Insitum Capital';state.reportarA=$('#set-reportar').value.trim();save();render();toast('Guardado ✓');};
@@ -1409,7 +1409,12 @@ function renderAjustes(){
   $('#set-export').onclick=exportJSON; $('#set-import').onclick=()=>$('#file-import').click(); $('#set-csv').onclick=exportCSV;
   $('#set-logout').onclick=doLogout;
   { const cb=$('#set-cargar-base'); if(cb) cb.onclick=cargarBase; }
-  $('#set-reset').onclick=()=>{if(confirm('Esto borra TUS datos y restaura el ejemplo. ¿Continuar?')){state=seedData();save();render();toast('Datos reiniciados');}};
+  $('#set-reset').onclick=()=>{
+    const n=state.prospects.length;
+    if(confirm(`Esto BORRA tus ${n} cliente(s) y todas sus actividades, y deja el CRM en cero.\n\nNo se puede deshacer. Respalda antes con "Respaldar (JSON)".\n\n¿Continuar?`)){
+      state=seedData(); state._baseOffered=false; save(); render(); toast('CRM vacío. Todo en cero ✓');
+    }
+  };
 }
 function openIndustry(name){
   const f=$('#form-industry');f.reset();const ind=name?state.industries.find(i=>i.name===name):null;
@@ -1501,16 +1506,12 @@ function defaultProducts(){return [
   {id:uid(),nombre:'Coberturas de tasa de interés (IRS)',categoria:'Derivados de tasa',prov:'Marex',desc:'Fija el costo de tu deuda a tasa variable.',ideal:'Empresas apalancadas a tasa flotante.'},
   {id:uid(),nombre:'Estructurados / Derivados a la medida',categoria:'Estructurados',prov:'Marex',desc:'Forwards participativos, knock-in/out.',ideal:'Tesorerías sofisticadas.'},
 ];}
+// Estado inicial de una cuenta NUEVA: en cero absoluto.
+// Sin clientes de ejemplo: las metricas (pipeline, cerrado, vencidas) deben reflejar
+// la realidad desde el primer dia, nunca datos inventados.
 function seedData(){
-  const d=(n)=>{const x=new Date();x.setDate(x.getDate()+n);return x.toISOString().slice(0,10);};
   return {brand:'Insitum Capital',products:defaultProducts(),industries:defaultIndustries(),market:{},notes:[],
-    prospects:[
-      {id:uid(),empresa:'Aceros del Bajío SA',contacto:'Laura Méndez',puesto:'Tesorera',telefono:'+52 477 000 0000',email:'lmendez@acerosbajio.mx',fuente:'Referido',segmento:'Manufactura/Automotriz',etapa:'Propuesta',productos:[],notional:8000000,feeBps:25,probabilidad:75,proximaAccion:'Enviar collar a costo cero',fechaProxima:d(-1),notas:'Importa acero de EE.UU.',creado:todayISO(),actividades:[],stageHistory:[]},
-      {id:uid(),empresa:'AeroCarga del Norte',contacto:'Roberto Salas',puesto:'CFO',telefono:'+52 81 000 0000',email:'rsalas@aerocarga.mx',fuente:'LinkedIn',segmento:'Aerolínea/Transporte',etapa:'Reunión',productos:[],notional:15000000,feeBps:18,probabilidad:50,proximaAccion:'Diagnóstico jet fuel',fechaProxima:d(2),notas:'Consumo fuerte de turbosina.',creado:todayISO(),actividades:[],stageHistory:[]},
-      {id:uid(),empresa:'Granos y Café del Sur',contacto:'María Ortiz',puesto:'Dir. Finanzas',telefono:'+52 951 000 0000',email:'mortiz@granosur.mx',fuente:'Evento / Cámara',segmento:'Agroindustria',etapa:'Contactado',productos:[],notional:5000000,feeBps:22,probabilidad:25,proximaAccion:'Llamada + nota',fechaProxima:d(0),notas:'Exporta café.',creado:todayISO(),actividades:[],stageHistory:[]},
-      {id:uid(),empresa:'TechPay Fintech',contacto:'Daniel Cruz',puesto:'COO',telefono:'+52 55 000 0000',email:'dcruz@techpay.mx',fuente:'Inbound (web)',segmento:'Fintech/Remesas',etapa:'Negociación',productos:[],notional:25000000,feeBps:12,probabilidad:90,proximaAccion:'Cerrar spread',fechaProxima:d(1),notas:'Volumen alto de remesas.',creado:todayISO(),actividades:[],stageHistory:[]},
-      {id:uid(),empresa:'Distribuidora Volta',contacto:'Jorge Lima',puesto:'Director',telefono:'+52 33 000 0000',email:'jlima@volta.mx',fuente:'Llamada en frío',segmento:'Retail/Comercio',etapa:'Cliente recurrente',productos:[],notional:6000000,feeBps:20,probabilidad:100,proximaAccion:'',fechaProxima:'',notas:'Recurrencia mensual.',creado:todayISO(),ganadoFecha:todayISO(),actividades:[],stageHistory:[]},
-    ],
+    prospects:[],
     meta:{version:3,updated:new Date().toISOString()}};
 }
 
