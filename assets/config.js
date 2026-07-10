@@ -20,11 +20,11 @@ window.APP_CONFIG = {
   // para que nadie mas pueda crear cuentas en el sitio publico.
   ALLOW_SIGNUP: true,
 
-  // Los 3 socios. En MODO DEMO se entra eligiéndolos; en la nube se crean en Supabase.
-  // Reemplaza nombres y correos por los reales de cada socio.
+  // Usuarios del MODO DEMO (sin nube). En modo nube NO se usan: el nombre para el
+  // saludo se deduce del propio correo, para no publicar correos personales aqui
+  // (este archivo se sirve publico junto con la app).
   DEMO_USERS: [
-    { email: 'socio1@insitum.mx', nombre: 'Socio 1 (tú)' },
-    { email: 'socio2@insitum.mx', nombre: 'Socio 2 — Administrador' },
-    { email: 'socio3@insitum.mx', nombre: 'Socio 3' },
+    { email: 'socio1@insitum.mx', nombre: 'Socio 1' },
+    { email: 'socio2@insitum.mx', nombre: 'Socio 2' },
   ],
 };

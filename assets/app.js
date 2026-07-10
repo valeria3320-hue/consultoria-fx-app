@@ -157,6 +157,15 @@ function segNames(){ return state.industries.map(i=>i.name); }
 function prodName(id){ const p=state.products.find(x=>x.id===id); return p?shortName(p.nombre):id; }
 function shortName(n){ return n.split(' (')[0].split(' &')[0].split(' –')[0]; }
 function brand(){ return (state&&state.brand)||'Insitum Capital'; }
+// Nombre para saludo/avatar a partir del correo, sin exponer correos en config.js.
+// "valeria3320@gmail.com" -> "Valeria" · "gori_mx@hotmail.com" -> "Gori"
+function displayName(email){
+  const local=(email||'').split('@')[0]||'';
+  const first=(local.split(/[._+-]/)[0]||local).replace(/\d+$/,'');
+  return first? first.charAt(0).toUpperCase()+first.slice(1) : (email||'');
+}
+// El nombre configurado gana; si no hay, se deduce del correo.
+function userName(email){ return ((DB.demoUsers().find(u=>u.email===email)||{}).nombre)||displayName(email); }
 function isWon(p){ return WON_STAGES.includes(p.etapa); }
 function compScore(p){ return (p.contacto?1:0)+(p.telefono?1:0)+(p.email?1:0); }
 function compBadge(p){ const c=compScore(p); const lbl=['Sin datos','Parcial','Parcial','Completo'][c]; return `<span class="comp comp-${c}" title="${(p.contacto?'contacto ':'')}${(p.telefono?'tel ':'')}${(p.email?'correo':'')}">${lbl}</span>`; }
@@ -230,7 +239,7 @@ function startApp(){
   $('#login').classList.add('hidden'); $('#app').classList.remove('hidden');
   const admin = DB.isAdmin(ME.email);
   { const ne=$('#nav-equipo'); ne.hidden=!admin; ne.style.display=admin?'flex':'none'; }
-  const name = (DB.demoUsers().find(u=>u.email===ME.email)||{}).nombre || ME.email;
+  const name = userName(ME.email);
   $('#user-name').textContent = name;
   $('#user-role').textContent = admin? 'Administrador · '+DB.mode() : 'Agente · '+DB.mode();
   $('#user-avatar').textContent = (name[0]||'?').toUpperCase();
@@ -275,7 +284,7 @@ function nextStep(p){
 }
 function renderMiDia(){
   const hora=new Date().getHours(); const saludo=hora<12?'Buenos días':hora<19?'Buenas tardes':'Buenas noches';
-  const nombre=((DB.demoUsers().find(u=>u.email===ME.email)||{}).nombre||ME.email).split(/[ @]/)[0];
+  const nombre=userName(ME.email).split(' ')[0];
   const open=state.prospects.filter(p=>OPEN_STAGES.includes(p.etapa));
   const ws=open.map(p=>({p,s:nextStep(p)}));
   const vencidas=ws.filter(x=>x.s.urg==='vencida').sort((a,b)=>a.s.dias-b.s.dias).map(x=>x.p);
@@ -318,7 +327,7 @@ function renderMiDia(){
       </div>
       <div id="md-noticias-out"></div>
     </div>
-    <div class="panel" style="background:#0f141d"><h3>☀️ Rutina de la mañana</h3><div class="list">
+    <div class="panel"><h3>☀️ Rutina de la mañana</h3><div class="list">
       <div class="list-item"><span>1. Genera y envía la <b>nota de apertura</b> por industria <span class="muted">(Notas de mercado → 🔄 En vivo)</span></span></div>
       <div class="list-item"><span>2. Resuelve <b>vencidas y de hoy</b> (abajo) 📞</span></div>
       <div class="list-item"><span>3. Haz <b>${PD.toqDia} toques</b> nuevos (empieza por 🔥 los que ya operaban, luego ⭐)</span></div>
@@ -364,7 +373,7 @@ function mandarReporte(){
   const ganados=state.prospects.filter(p=>(p.ganadoFecha||'')===t||(p.operacion&&p.operacion.fecha===t));
   const ganancia=ganados.reduce((s,p)=>s+(p.operacion?(p.operacion.ganancia||0):revenueOf(p)),0);
   const pend=pendingActivities().filter(a=>a.dias<=0).length;
-  const nombre=((DB.demoUsers().find(u=>u.email===ME.email)||{}).nombre||ME.email).split(/[ @]/)[0];
+  const nombre=userName(ME.email).split(' ')[0];
   const txt=[`📊 *Reporte de ${nombre}*`,`🗓️ ${fechaLarga()}`,``,
     `✅ Clientes trabajados: ${new Set(acts.map(a=>a.emp)).size}`,
     `📞 Actividades del día: ${acts.length}`,
@@ -414,7 +423,7 @@ function renderResumen(){
 function donut(segments,size=168,thick=24){
   const total=segments.reduce((s,x)=>s+x.value,0)||1, c=size/2, r=(size-thick)/2, circ=2*Math.PI*r; let off=0;
   const arcs=segments.filter(s=>s.value>0).map(s=>{const len=s.value/total*circ; const el=`<circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${s.color}" stroke-width="${thick}" stroke-dasharray="${len.toFixed(2)} ${(circ-len).toFixed(2)}" stroke-dashoffset="${(-off).toFixed(2)}" transform="rotate(-90 ${c} ${c})"/>`; off+=len; return el;}).join('');
-  return `<svg class="donut" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}"><circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="#1b2230" stroke-width="${thick}"/>${arcs}<text x="${c}" y="${c-2}" text-anchor="middle" fill="#e6edf3" font-size="30" font-weight="800">${total}</text><text x="${c}" y="${c+19}" text-anchor="middle" fill="#8b97a8" font-size="11.5">clientes</text></svg>`;
+  return `<svg class="donut" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}"><circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="#e8edf3" stroke-width="${thick}"/>${arcs}<text x="${c}" y="${c-2}" text-anchor="middle" fill="#1b2430" font-size="30" font-weight="800">${total}</text><text x="${c}" y="${c+19}" text-anchor="middle" fill="#64748b" font-size="11.5">clientes</text></svg>`;
 }
 function funnelRows(){
   const max=Math.max(1,...STAGES.map(s=>state.prospects.filter(p=>p.etapa===s).length));
@@ -513,7 +522,7 @@ function openClient(id){
       <div class="drawer-row"><span class="muted">Email</span><span>${p.email?`<a class="mini-link" href="mailto:${esc(p.email)}">${esc(p.email)}</a>`:'—'}</span></div>
       <div class="drawer-row"><span class="muted">Productos</span><span>${(p.productos||[]).map(pr=>`<span class="tag">${esc(prodName(pr))}</span>`).join(' ')||'—'}</span></div>
       <div class="drawer-row"><span class="muted">Próxima acción</span><span>${esc(p.proximaAccion||'—')} ${p.fechaProxima?`<span class="tag">${p.fechaProxima}</span>`:''}</span></div>
-      ${p.operacion?`<div class="drawer-note" style="border-color:#1f6f3a;background:#10241a"><b>💰 Operación ganada</b><br>${esc(p.operacion.producto||'Operación')} · Vol ${fmtUSD(p.operacion.volumen)} · Nivel ${esc(p.operacion.nivel||'—')} · <b style="color:var(--green)">Ganancia ${fmtUSD(p.operacion.ganancia)}</b> · ${esc(p.operacion.fecha||'')}</div>`:''}
+      ${p.operacion?`<div class="drawer-note" style="border-color:#86e0a5;background:#e7f6ec;color:var(--text)"><b>💰 Operación ganada</b><br>${esc(p.operacion.producto||'Operación')} · Vol ${fmtUSD(p.operacion.volumen)} · Nivel ${esc(p.operacion.nivel||'—')} · <b style="color:var(--green)">Ganancia ${fmtUSD(p.operacion.ganancia)}</b> · ${esc(p.operacion.fecha||'')}</div>`:''}
       ${p.notas?`<div class="drawer-note">${esc(p.notas)}</div>`:''}
       <div class="drawer-actions"><button class="primary-btn" id="drawer-act">+ Actividad</button><button class="ghost-btn" id="drawer-sched">📅 Agendar</button><button class="ghost-btn" id="drawer-cot">≣ Cotizar</button><button class="ghost-btn" id="drawer-edit">✎ Editar</button><button class="ghost-btn danger" id="drawer-del">🗑</button></div>
       <h3 class="drawer-h3">Línea de tiempo</h3>
@@ -548,7 +557,7 @@ const PERF_Q = [
   {k:'decisor',label:'¿Quién decide?',opts:[['solo','El contacto decide solo'],['socios','Decide con socios / dirección'],['recomienda','Solo recomienda (tesorería/finanzas)'],['noclaro','No está claro']]},
   {k:'horizonte',label:'¿Cuándo quiere resolverlo?',opts:[['mes','Este mes'],['trimestre','Este trimestre'],['explora','Solo está explorando']]},
 ];
-const PERF_GRADES = {A:['Prioridad máxima','#3fb950'],B:['Prospecto fuerte','#2dd4bf'],C:['Cultivar','#d29922'],D:['Baja prioridad','#f85149']};
+const PERF_GRADES = {A:['Prioridad máxima','#16a34a'],B:['Prospecto fuerte','#0d9488'],C:['Cultivar','#d97706'],D:['Baja prioridad','#dc2626']};
 const PERF_NEXT = {A:'Llamar HOY y agendar diagnóstico de exposición (30 min).',B:'Agendar reunión esta semana; enviar nota de mercado de su industria.',C:'Meter a goteo: nota de mercado semanal y retomar en 30 días.',D:'Dejar en base; reevaluar si cambia su exposición.'};
 function perfLabel(k,v){ const q=PERF_Q.find(x=>x.k===k); if(!q||!q.opts)return v||'—'; const o=q.opts.find(x=>x[0]===v); return o?o[1]:'—'; }
 function perfScore(d){
@@ -1154,7 +1163,7 @@ function renderSeguimiento(){
   const acts=pendingActivities();
   const groups=[['Vencidas',acts.filter(a=>a.dias<0)],['Hoy',acts.filter(a=>a.dias===0)],['Próximos 7 días',acts.filter(a=>a.dias>0&&a.dias<=7)],['Más adelante',acts.filter(a=>a.dias>7)]];
   $('#view-seguimiento').innerHTML=`
-    <div class="panel" style="background:#0f141d"><h3>Cadencia recomendada</h3><div class="list">
+    <div class="panel"><h3>Cadencia recomendada</h3><div class="list">
       <div class="list-item"><span><strong>Día 0</strong> — Primer contacto + alta en CRM</span></div>
       <div class="list-item"><span><strong>Día 2</strong> — Nota de mercado de su industria</span></div>
       <div class="list-item"><span><strong>Día 5</strong> — Llamada + agendar cita de diagnóstico</span></div>
@@ -1338,7 +1347,7 @@ function renderEquipo(){
     const cards=rows.map(r=>{ const ps=(r.data&&r.data.prospects)||[]; const open=ps.filter(p=>OPEN_STAGES.includes(p.etapa));
       const pipe=open.reduce((s,p)=>s+revenueOf(p),0); const won=ps.filter(p=>WON_STAGES.includes(p.etapa)).reduce((s,p)=>s+revenueOf(p),0);
       totPipe+=pipe;totWon+=won;totCli+=ps.length;
-      const nombre=(DB.demoUsers().find(u=>u.email===r.email)||{}).nombre||r.email;
+      const nombre=userName(r.email);
       return {nombre,email:r.email,n:ps.length,open:open.length,pipe,won};
     }).sort((a,b)=>b.pipe-a.pipe);
     v.innerHTML=`
