@@ -132,6 +132,10 @@ function errMsg(e){
   if(/rate limit|too many/i.test(m)) return 'Demasiados intentos. Espera un minuto y vuelve a probar.';
   if(/at least 6|password should/i.test(m)) return 'La contraseña debe tener al menos 6 caracteres.';
   if(/user not found|usuario no encontrado/i.test(m)) return 'Ese usuario no existe. Revisa el correo.';
+  if(/already registered|ya tiene cuenta/i.test(m)) return 'Ese correo ya tiene cuenta. Entra con tu contraseña, o usa "¿Olvidaste tu contraseña?".';
+  if(/signups?\s+(are\s+)?not allowed|disabled/i.test(m)) return 'El registro está desactivado. Avísame y lo habilito.';
+  if(/invalid.*email|email.*invalid/i.test(m)) return 'Ese correo no es válido. Revísalo.';
+  if(/unable to validate email/i.test(m)) return 'No pudimos validar ese correo. Escríbelo completo (ej. nombre@gmail.com).';
   return m||'Algo falló. Intenta de nuevo.';
 }
 function uid(){ return 'p'+Math.random().toString(36).slice(2,9)+Date.now().toString(36).slice(-3); }
@@ -185,6 +189,19 @@ function planData(){
 /* ===========================================================================
    LOGIN / ARRANQUE
    =========================================================================== */
+let signupMode=false;
+// Pinta la pantalla de login según el modo: iniciar sesión o crear cuenta.
+function applyAuthMode(){
+  if(!DB.cloud) return;
+  $('#login-mode').textContent = signupMode
+    ? 'Crea tu cuenta · usa un correo real y una contraseña que recuerdes'
+    : 'Modo nube · inicia sesión con tu correo';
+  $('#login-submit').textContent = signupMode? 'Crear cuenta' : 'Entrar';
+  const su=$('#btn-signup-toggle');
+  if(su) su.textContent = signupMode? '← Ya tengo cuenta, quiero entrar' : '¿No tienes cuenta? Créala aquí';
+  const fg=$('#btn-forgot'); if(fg) fg.classList.toggle('hidden',signupMode);
+  $('#form-login').password.setAttribute('autocomplete',signupMode?'new-password':'current-password');
+}
 function showLogin(){
   $('#login-brand-name').textContent='Insitum Capital';
   $('#login-mark').textContent='IC';
@@ -197,6 +214,8 @@ function showLogin(){
   // Nube: pre-llenar el último correo usado (menos teclado para el operador).
   if(!demo){ const last=localStorage.getItem('cfx_last_email'); if(last)$('#form-login').email.value=last; }
   const fg=$('#btn-forgot'); if(fg)fg.classList.toggle('hidden',demo);
+  const su=$('#btn-signup-toggle'); if(su)su.classList.toggle('hidden',demo||!DB.allowSignup);
+  signupMode=false; applyAuthMode();
   $('#login').classList.remove('hidden'); $('#app').classList.add('hidden');
 }
 async function afterLogin(user){
@@ -1492,8 +1511,29 @@ function init(){
     e.preventDefault(); const f=e.target; const d=Object.fromEntries(new FormData(f).entries());
     const email = DB.cloud ? d.email : d.demoUser;
     const errEl=$('#login-error'); errEl.classList.add('hidden');
-    try{ const user=await DB.signIn(email,d.password); localStorage.setItem('cfx_last_email',email||''); await afterLogin(user); }
+    try{
+      if(signupMode){
+        const r=await DB.signUp(email,d.password);
+        localStorage.setItem('cfx_last_email',email||'');
+        if(!r.confirmar){ await afterLogin(r.user); return; }   // sin confirmación: entra directo
+        // Con confirmación: el correo llega; la página del enlace puede verse rota, pero confirma igual.
+        signupMode=false; applyAuthMode();
+        $('#login-mode').innerHTML=`Te mandamos un correo a <b>${esc(email)}</b>. Ábrelo y da clic en el enlace. `
+          +`<b>Aunque esa página se vea con error, tu cuenta ya quedó confirmada</b> — regresa aquí y entra con tu correo y contraseña.`;
+        toast('Cuenta creada ✓ Revisa tu correo');
+        return;
+      }
+      const user=await DB.signIn(email,d.password);
+      localStorage.setItem('cfx_last_email',email||'');
+      await afterLogin(user);
+    }
     catch(err){ errEl.textContent=errMsg(err); errEl.classList.remove('hidden'); }
+  };
+  // Alternar entre "Entrar" y "Crear cuenta".
+  const su=$('#btn-signup-toggle'); if(su)su.onclick=()=>{
+    signupMode=!signupMode; applyAuthMode();
+    $('#login-error').classList.add('hidden');
+    $('#form-login').email.focus();
   };
   // Ojito: ver/ocultar la contraseña mientras se escribe.
   const eye=$('#btn-eye'); if(eye)eye.onclick=()=>{ const i=$('#form-login').password; i.type=(i.type==='password')?'text':'password'; eye.textContent=(i.type==='password')?'👁':'🙈'; i.focus(); };

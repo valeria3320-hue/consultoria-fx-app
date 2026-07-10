@@ -15,6 +15,11 @@ window.APP_CONFIG = {
   // OJO: el admin es OTRO socio, no el usuario principal. Reemplaza por el correo real.
   ADMIN_EMAILS: ['valeria3320@gmail.com'],
 
+  // Registro desde la app ("Crear cuenta" en el login).
+  // Dejalo en true SOLO mientras dan de alta a los socios; luego ponlo en false
+  // para que nadie mas pueda crear cuentas en el sitio publico.
+  ALLOW_SIGNUP: true,
+
   // Los 3 socios. En MODO DEMO se entra eligiéndolos; en la nube se crean en Supabase.
   // Reemplaza nombres y correos por los reales de cada socio.
   DEMO_USERS: [

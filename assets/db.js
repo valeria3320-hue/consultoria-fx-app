@@ -37,6 +37,8 @@ window.DB = (function(){
 
   return {
     cloud, isAdmin, demoUsers, cloudRev,
+    // ¿Se puede crear cuenta desde la app? Solo en nube y si el config lo permite.
+    allowSignup: cloud && cfg.ALLOW_SIGNUP !== false,
     mode(){ return cloud ? 'nube' : 'demo'; },
     // ¿La nube tiene una versión más nueva que la última que leímos aquí?
     isNewer(remote){ return !!(cloud && remote && remote !== rev); },
@@ -60,6 +62,24 @@ window.DB = (function(){
       if (!demoUsers().some(u => lc(u.email)===lc(email))) throw new Error('Usuario no encontrado');
       localStorage.setItem('cfx_demo_user', email);
       return { email, id:email };
+    },
+
+    // Alta de cuenta desde la app. La contraseña la teclea la persona; nunca se guarda aquí.
+    // Devuelve {user,confirmar}: si el proyecto pide confirmar correo, no hay sesión todavía.
+    async signUp(email, password){
+      if (!cloud) throw new Error('Disponible solo en modo nube');
+      const { data, error } = await sb.auth.signUp({
+        email, password,
+        options:{ emailRedirectTo: location.origin + location.pathname }
+      });
+      if (error) throw new Error(error.message);
+      const u = data.user;
+      // Supabase devuelve identities=[] cuando el correo YA existe (no revela el usuario).
+      if (u && Array.isArray(u.identities) && u.identities.length === 0){
+        const e = new Error('Ese correo ya tiene cuenta'); e.code = 'EXISTS'; throw e;
+      }
+      if (data.session && u) return { user:{ email:u.email, id:u.id }, confirmar:false };
+      return { user:null, confirmar:true };
     },
 
     async signOut(){
