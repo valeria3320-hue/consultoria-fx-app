@@ -127,7 +127,7 @@ window.addEventListener('focus',pullIfStale);
 function errMsg(e){
   const m=(e&&e.message)||'';
   if(/invalid login credentials/i.test(m)) return 'Correo o contraseña incorrectos';
-  if(/email not confirmed/i.test(m)) return 'Tu correo no está confirmado. Avísale al administrador.';
+  if(/email not confirmed/i.test(m)) return 'Falta confirmar tu correo: abre el enlace que te enviamos (revisa spam). La página que abra puede verse con error — no importa, con eso queda confirmado.';
   if(/failed to fetch|networkerror|load failed|network request/i.test(m)) return 'Sin internet. Revisa tu conexión e intenta de nuevo.';
   if(/rate limit|too many/i.test(m)) return 'Demasiados intentos. Espera un minuto y vuelve a probar.';
   if(/at least 6|password should/i.test(m)) return 'La contraseña debe tener al menos 6 caracteres.';
@@ -200,6 +200,7 @@ function applyAuthMode(){
   const su=$('#btn-signup-toggle');
   if(su) su.textContent = signupMode? '← Ya tengo cuenta, quiero entrar' : '¿No tienes cuenta? Créala aquí';
   const fg=$('#btn-forgot'); if(fg) fg.classList.toggle('hidden',signupMode);
+  const rs=$('#btn-resend'); if(rs) rs.classList.add('hidden');   // solo aparece tras el error de "no confirmado"
   $('#form-login').password.setAttribute('autocomplete',signupMode?'new-password':'current-password');
 }
 function showLogin(){
@@ -1527,7 +1528,24 @@ function init(){
       localStorage.setItem('cfx_last_email',email||'');
       await afterLogin(user);
     }
-    catch(err){ errEl.textContent=errMsg(err); errEl.classList.remove('hidden'); }
+    catch(err){
+      errEl.textContent=errMsg(err); errEl.classList.remove('hidden');
+      // Si el correo no está confirmado, ofrecer reenviar la liga.
+      const noConf=/not confirmed|no está confirmado/i.test((err&&err.message)||'');
+      const rs=$('#btn-resend'); if(rs)rs.classList.toggle('hidden',!(noConf&&DB.cloud));
+    }
+  };
+  // Reenviar el correo de confirmación (por si se perdió o cayó en spam).
+  const rs=$('#btn-resend'); if(rs)rs.onclick=async()=>{
+    const email=($('#form-login').email.value||'').trim();
+    if(!email){ toast('Primero escribe tu correo arriba'); $('#form-login').email.focus(); return; }
+    try{
+      await DB.resendConfirm(email);
+      toast('Correo de confirmación reenviado ✓ Revisa también la carpeta de spam');
+      $('#login-mode').innerHTML=`Te reenviamos el correo a <b>${esc(email)}</b>. Dale clic al enlace. `
+        +`<b>Aunque la página se vea con error, la cuenta ya queda confirmada</b> — luego regresa aquí y entra.`;
+    }
+    catch(e){ toast('No se pudo: '+errMsg(e)); }
   };
   // Alternar entre "Entrar" y "Crear cuenta".
   const su=$('#btn-signup-toggle'); if(su)su.onclick=()=>{

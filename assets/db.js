@@ -87,6 +87,16 @@ window.DB = (function(){
       else localStorage.removeItem('cfx_demo_user');
     },
 
+    // Reenvía el correo de confirmación (cuando el original se perdió o cayó en spam).
+    async resendConfirm(email){
+      if (!cloud) throw new Error('Disponible solo en modo nube');
+      const { error } = await sb.auth.resend({
+        type:'signup', email,
+        options:{ emailRedirectTo: location.origin + location.pathname }
+      });
+      if (error) throw new Error(error.message);
+    },
+
     async resetPassword(email){
       if (!cloud) throw new Error('Disponible solo en modo nube');
       const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
