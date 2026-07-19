@@ -245,11 +245,11 @@ function showLogin(){
   $('#login-brand-name').textContent='Insitum Capital';
   $('#login-mark').textContent='IC';
   const demo = !DB.cloud;
-  $('#login-mode').textContent = demo? 'Modo demo · elige tu usuario (sin contraseña)' : 'Modo nube · inicia sesión con tu correo';
+  $('#login-mode').textContent = demo? 'Elige quién eres y entra' : 'Modo nube · inicia sesión con tu correo';
   $('#lbl-demo-user').classList.toggle('hidden',!demo);
   $('#lbl-email').classList.toggle('hidden',demo);
   $('#lbl-pass').classList.toggle('hidden',demo);
-  if(demo){ $('#demo-user-select').innerHTML = DB.demoUsers().map(u=>`<option value="${esc(u.email)}">${esc(u.nombre)} — ${esc(u.email)}</option>`).join(''); }
+  if(demo){ $('#demo-user-select').innerHTML = DB.demoUsers().map(u=>`<option value="${esc(u.email)}">${esc(u.nombre)}</option>`).join(''); }
   // Nube: pre-llenar el último correo usado (menos teclado para el operador).
   if(!demo){ const last=localStorage.getItem('cfx_last_email'); if(last)$('#form-login').email.value=last; }
   const fg=$('#btn-forgot'); if(fg)fg.classList.toggle('hidden',demo);
@@ -272,7 +272,7 @@ function startApp(){
   $('#user-name').textContent = name;
   $('#user-role').textContent = admin? 'Administrador · '+DB.mode() : 'Agente · '+DB.mode();
   $('#user-avatar').textContent = (name[0]||'?').toUpperCase();
-  $('#privacy-note').textContent = DB.cloud? '☁️ Datos en la nube, sincronizados.' : '🔒 Datos en este navegador (demo).';
+  $('#privacy-note').textContent = DB.cloud? '☁️ Datos en la nube, sincronizados.' : '🔒 Tus datos viven en este dispositivo. Respalda seguido.';
   render();
   // Base de clientes: ofrecer al inicio, o ACTUALIZAR SOLA si detecta una versión nueva.
   if(window.BASE_CLIENTES && window.BASE_CLIENTES.length){

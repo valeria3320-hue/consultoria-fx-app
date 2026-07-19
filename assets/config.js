@@ -8,23 +8,29 @@
    Si lo dejas vacío, la app funciona en MODO DEMO local (sin internet).
    =========================================================================== */
 window.APP_CONFIG = {
-  SUPABASE_URL: 'https://owvbboityzjezxwlbpaa.supabase.co',        // ej. https://abcd1234.supabase.co
-  SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im93dmJib2l0eXpqZXp4d2xicGFhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAyNTU1OTEsImV4cCI6MjA5NTgzMTU5MX0.TXSVONHD-GxLFvWnHVX_X_ULoma6MI6RS6d6vk-GjeI',   // ej. eyJhbGciOi....  (clave pública, segura de exponer)
+  // ---------------------------------------------------------------------------
+  // MODO SIN NUBE (actual): sin contraseñas, sin correos, nunca se pausa ni se
+  // borra. Los datos viven en el dispositivo de cada quien.
+  //
+  // PARA VOLVER A LA NUBE algun dia: crear un proyecto en supabase.com, correr
+  // supabase.sql, y pegar aqui abajo la Project URL y la anon key. La app cambia
+  // sola de modo. (El proyecto anterior, owvbboityzjezxwlbpaa, fue ELIMINADO por
+  // Supabase tras quedar pausado: en el plan gratuito eso pasa si no se usa.)
+  // ---------------------------------------------------------------------------
+  SUPABASE_URL: '',        // ej. https://abcd1234.supabase.co
+  SUPABASE_ANON_KEY: '',   // ej. eyJhbGciOi....  (clave pública, segura de exponer)
 
-  // Correos con rol ADMIN (ven la cartera de TODOS los socios).
-  // OJO: el admin es OTRO socio, no el usuario principal. Reemplaza por el correo real.
-  ADMIN_EMAILS: ['valeria3320@gmail.com'],
+  // Quien ve la pestaña "Equipo" (carteras de todos, solo lectura).
+  ADMIN_EMAILS: ['valeria'],
 
-  // Registro desde la app ("Crear cuenta" en el login).
-  // Dejalo en true SOLO mientras dan de alta a los socios; luego ponlo en false
-  // para que nadie mas pueda crear cuentas en el sitio publico.
-  ALLOW_SIGNUP: true,
+  // Registro desde la app. Solo aplica en modo nube; sin nube no hay contraseñas.
+  ALLOW_SIGNUP: false,
 
-  // Usuarios del MODO DEMO (sin nube). En modo nube NO se usan: el nombre para el
-  // saludo se deduce del propio correo, para no publicar correos personales aqui
-  // (este archivo se sirve publico junto con la app).
+  // Quien entra a la app. Cada uno elige su nombre y tiene SU propia cartera.
+  // El "id" NO es un correo a proposito: este archivo se publica con la app y no
+  // queremos exponer correos personales. Solo es la etiqueta de su cartera local.
   DEMO_USERS: [
-    { email: 'socio1@insitum.mx', nombre: 'Socio 1' },
-    { email: 'socio2@insitum.mx', nombre: 'Socio 2' },
+    { email: 'gori',    nombre: 'Gori' },
+    { email: 'valeria', nombre: 'Valeria' },
   ],
 };
