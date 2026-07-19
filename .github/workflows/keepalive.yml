@@ -9,8 +9,8 @@ name: Mantener Supabase despierto
 
 on:
   schedule:
-    - cron: '17 13 */3 * *'   # cada ~3 dias, 13:17 UTC (~7:17 am CDMX)
-  workflow_dispatch: {}         # boton para correrlo a mano desde la pestana Actions
+    - cron: '17 13 * * *'   # DIARIO 13:17 UTC (~7:17 am CDMX). Antes cada 3 dias: no basto.
+  workflow_dispatch: {}       # boton para correrlo a mano desde la pestana Actions
 
 jobs:
   ping:
@@ -18,13 +18,18 @@ jobs:
     steps:
       - name: Ping al REST de Supabase
         run: |
-          URL="https://owvbboityzjezxwlbpaa.supabase.co/rest/v1/crm_states?select=user_id&limit=1"
+          BASE="https://owvbboityzjezxwlbpaa.supabase.co"
           # anon key PUBLICA (la misma que sirve la app; segura de exponer).
           KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im93dmJib2l0eXpqZXp4d2xicGFhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAyNTU1OTEsImV4cCI6MjA5NTgzMTU5MX0.TXSVONHD-GxLFvWnHVX_X_ULoma6MI6RS6d6vk-GjeI"
-          code=$(curl -s -o /dev/null -w "%{http_code}" "$URL" -H "apikey: $KEY" -H "Authorization: Bearer $KEY")
-          echo "Supabase respondio HTTP $code"
-          if [ "$code" -ge 500 ]; then
-            echo "::error::Supabase devolvio $code — el proyecto puede estar pausado. Entra al dashboard y dale Resume."
+          # Consulta REAL a la base (no solo /health): asi cuenta como actividad de BD.
+          code=$(curl -s -m 30 -o /tmp/out.txt -w "%{http_code}" \
+            "$BASE/rest/v1/crm_states?select=user_id&limit=1" \
+            -H "apikey: $KEY" -H "Authorization: Bearer $KEY")
+          echo "HTTP $code · respuesta: $(head -c 200 /tmp/out.txt)"
+          # 000 = ni siquiera conecto (host caido/pausado). 5xx = servidor con problema.
+          if [ "$code" = "000" ] || [ "$code" -ge 500 ]; then
+            echo "::error::Supabase no respondio (HTTP $code). El proyecto esta PAUSADO."
+            echo "::error::Reactivalo: https://supabase.com/dashboard/project/owvbboityzjezxwlbpaa → Resume project"
             exit 1
           fi
-          echo "OK: proyecto despierto."
+          echo "OK: proyecto despierto (HTTP $code)."

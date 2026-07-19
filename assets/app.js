@@ -77,9 +77,20 @@ async function doSave(){
       }catch(e2){ e=e2; }
     }
     savePending=true; syncBanner(true);
+    // Si el fallo es de red, averiguar si es internet o el servidor dormido.
+    if(DB.cloud && /failed to fetch|networkerror|load failed|network request/i.test((e&&e.message)||'')){
+      diagnosticarRed().then(d=>{
+        if(d==='servidorDormido' && savePending)
+          syncBanner(true,'⚠️ Tus cambios NO se han guardado. '+HTML_SERVIDOR_DORMIDO());
+      }).catch(()=>{});
+    }
   }
 }
-function syncBanner(on){ const b=$('#sync-banner'); if(b)b.classList.toggle('hidden',!on); }
+function syncBanner(on,html){
+  const b=$('#sync-banner'); if(!b) return;
+  if(on) b.innerHTML = html || '⚠️ Sin conexión — tus cambios NO se han guardado. Reintentando… no cierres la app.';
+  b.classList.toggle('hidden',!on);
+}
 window.addEventListener('online',()=>{ if(savePending)doSave(); });
 setInterval(()=>{ if(savePending)doSave(); },20000);
 function flushSave(){ if(ME&&state){ if(saveTimer)clearTimeout(saveTimer); DB.saveState(ME,state).catch(()=>{}); } }
@@ -122,6 +133,24 @@ async function pullIfStale(){
 }
 document.addEventListener('visibilitychange',()=>{ if(!document.hidden)pullIfStale(); });
 window.addEventListener('focus',pullIfStale);
+
+// Liga al panel del proyecto Supabase (deducida de la URL, sin hardcodear).
+function supabaseDashboardUrl(){
+  const m=((window.APP_CONFIG||{}).SUPABASE_URL||'').match(/https?:\/\/([a-z0-9]+)\.supabase\.co/i);
+  return m? 'https://supabase.com/dashboard/project/'+m[1] : 'https://supabase.com/dashboard';
+}
+// Distingue "no hay internet" de "el servidor de datos está dormido".
+// Si alcanzamos NUESTRO sitio pero no Supabase, el problema es Supabase (free tier pausado).
+async function diagnosticarRed(){
+  if(!navigator.onLine) return 'sinInternet';
+  try{ await fetch('manifest.json?ping='+Date.now(),{cache:'no-store'}); }
+  catch(e){ return 'sinInternet'; }
+  return 'servidorDormido';
+}
+const HTML_SERVIDOR_DORMIDO = ()=>
+  `El servidor de datos está <b>dormido</b> (se pausa solo tras varios días sin uso). `
+  +`<a href="${supabaseDashboardUrl()}" target="_blank" rel="noopener"><b>Reactivarlo aquí</b></a> `
+  +`→ botón <b>Resume project</b>. Tarda 1–2 min; luego recarga esta página y entra.`;
 
 // Errores técnicos -> español claro (para un operador no técnico).
 function errMsg(e){
@@ -1539,9 +1568,19 @@ function init(){
       await afterLogin(user);
     }
     catch(err){
+      const m=(err&&err.message)||'';
+      // Fallo de red: distinguir "sin internet" de "Supabase dormido" antes de acusar al wifi.
+      if(/failed to fetch|networkerror|load failed|network request/i.test(m) && DB.cloud){
+        errEl.textContent='Revisando…'; errEl.classList.remove('hidden');
+        if(await diagnosticarRed()==='servidorDormido'){
+          errEl.innerHTML=HTML_SERVIDOR_DORMIDO(); errEl.classList.remove('hidden');
+          $('#btn-resend').classList.add('hidden');
+          return;
+        }
+      }
       errEl.textContent=errMsg(err); errEl.classList.remove('hidden');
       // Si el correo no está confirmado, ofrecer reenviar la liga.
-      const noConf=/not confirmed|no está confirmado/i.test((err&&err.message)||'');
+      const noConf=/not confirmed|no está confirmado/i.test(m);
       const rs=$('#btn-resend'); if(rs)rs.classList.toggle('hidden',!(noConf&&DB.cloud));
     }
   };
