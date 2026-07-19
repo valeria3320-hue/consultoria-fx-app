@@ -33,4 +33,13 @@ drop policy if exists "admin_select_all" on public.crm_states;
 create policy "admin_select_all" on public.crm_states
   for select using ( (auth.jwt() ->> 'email') in ('valeria3320@gmail.com') );
 
--- Listo. Ahora crea los usuarios en Authentication → Users → Add user.
+-- ===========================================================================
+-- LISTO. Ya NO hace falta crear usuarios a mano: la app trae "Crear cuenta"
+-- en la pantalla de entrada.
+--
+-- Para que crear cuenta funcione sin fricciones, en el panel de Supabase:
+--   Authentication → Sign In / Providers → Email
+--     · "Confirm email"  ->  APAGADO   (asi entran al instante, sin correo)
+--   Authentication → URL Configuration
+--     · Site URL -> la direccion real del sitio (no localhost:3000)
+-- ===========================================================================
