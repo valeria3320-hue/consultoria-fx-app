@@ -49,7 +49,7 @@ function migrate(s){
   if(!s.industries||!s.industries.length) s.industries=defaultIndustries();
   if(!s.market) s.market={};
   if(!s.notes) s.notes=[];
-  (s.prospects||[]).forEach(p=>{ if(p.etapa==='Prospecto')p.etapa='Cliente nuevo'; if(p.etapa==='Cliente activo')p.etapa='Cliente recurrente'; p.actividades=p.actividades||[]; p.stageHistory=p.stageHistory||[]; });
+  (s.prospects||[]).forEach(p=>{ if(!p.id)p.id=uid(); if(p.etapa==='Prospecto')p.etapa='Cliente nuevo'; if(p.etapa==='Cliente activo')p.etapa='Cliente recurrente'; p.actividades=p.actividades||[]; p.stageHistory=p.stageHistory||[]; });
   return s;
 }
 let savePending=false, lastPull=0;
