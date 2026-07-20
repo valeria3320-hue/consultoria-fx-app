@@ -264,13 +264,24 @@ async function afterLogin(user){
   await DB.saveState(user,state).catch(()=>{});
   startApp();
 }
+// Admin = lo dice el servidor (la politica RLS en Supabase), no un correo en el
+// archivo publico. Asi no hay que publicar correos personales en config.js.
+function isAdminUser(){ return !!(ME && (ME.isAdmin || DB.isAdmin(ME.email))); }
+function pintarRolAdmin(admin){
+  const ne=$('#nav-equipo'); if(ne){ ne.hidden=!admin; ne.style.display=admin?'flex':'none'; }
+  $('#user-role').textContent = admin? 'Administrador · '+DB.mode() : 'Agente · '+DB.mode();
+}
 function startApp(){
   $('#login').classList.add('hidden'); $('#app').classList.remove('hidden');
-  const admin = DB.isAdmin(ME.email);
-  { const ne=$('#nav-equipo'); ne.hidden=!admin; ne.style.display=admin?'flex':'none'; }
+  const admin = isAdminUser();
+  pintarRolAdmin(admin);
   const name = userName(ME.email);
   $('#user-name').textContent = name;
-  $('#user-role').textContent = admin? 'Administrador · '+DB.mode() : 'Agente · '+DB.mode();
+  // En nube, confirmar contra el servidor: si podemos leer carteras ajenas, somos admin.
+  if(DB.cloud && !admin) DB.loadAll().then(rows=>{
+    const mio=(ME.email||'').toLowerCase();
+    if((rows||[]).some(r=>(r.email||'').toLowerCase()!==mio)){ ME.isAdmin=true; pintarRolAdmin(true); }
+  }).catch(()=>{});
   $('#user-avatar').textContent = (name[0]||'?').toUpperCase();
   $('#privacy-note').textContent = DB.cloud? '☁️ Datos en la nube, sincronizados.' : '🔒 Tus datos viven en este dispositivo. Respalda seguido.';
   render();
@@ -1369,7 +1380,7 @@ function submitProduct(e){e.preventDefault();const d=Object.fromEntries(new Form
 /* ---------- EQUIPO (admin) ---------- */
 function renderEquipo(){
   const v=$('#view-equipo');
-  if(!DB.isAdmin(ME.email)){ v.innerHTML=empty('Solo el administrador puede ver la cartera del equipo.'); return; }
+  if(!isAdminUser()){ v.innerHTML=empty('Solo el administrador puede ver la cartera del equipo.'); return; }
   v.innerHTML=`<div class="empty">Cargando cartera del equipo…</div>`;
   DB.loadAll().then(rows=>{
     let totPipe=0,totWon=0,totCli=0;

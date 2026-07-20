@@ -9,22 +9,25 @@
    =========================================================================== */
 window.APP_CONFIG = {
   // ---------------------------------------------------------------------------
-  // MODO SIN NUBE (actual): sin contraseñas, sin correos, nunca se pausa ni se
-  // borra. Los datos viven en el dispositivo de cada quien.
+  // MODO NUBE: login por correo + datos sincronizados entre dispositivos.
+  // Para trabajar SIN nube (sin contraseñas, todo local), deja estos dos vacios:
+  // la app cambia sola de modo.
   //
-  // PARA VOLVER A LA NUBE algun dia: crear un proyecto en supabase.com, correr
-  // supabase.sql, y pegar aqui abajo la Project URL y la anon key. La app cambia
-  // sola de modo. (El proyecto anterior, owvbboityzjezxwlbpaa, fue ELIMINADO por
-  // Supabase tras quedar pausado: en el plan gratuito eso pasa si no se usa.)
+  // OJO plan gratuito: si el proyecto pasa ~7 dias sin uso, Supabase lo PAUSA
+  // (su direccion deja de existir y la app avisa con la liga para reactivarlo).
+  // Se restaura desde el panel; los datos quedan a salvo ~90 dias.
   // ---------------------------------------------------------------------------
-  SUPABASE_URL: '',        // ej. https://abcd1234.supabase.co
-  SUPABASE_ANON_KEY: '',   // ej. eyJhbGciOi....  (clave pública, segura de exponer)
+  SUPABASE_URL: 'https://owvbboityzjezxwlbpaa.supabase.co',
+  SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im93dmJib2l0eXpqZXp4d2xicGFhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAyNTU1OTEsImV4cCI6MjA5NTgzMTU5MX0.TXSVONHD-GxLFvWnHVX_X_ULoma6MI6RS6d6vk-GjeI',
 
-  // Quien ve la pestaña "Equipo" (carteras de todos, solo lectura).
-  ADMIN_EMAILS: ['valeria'],
+  // Quien ve la pestaña "Equipo". Se deja VACIO a proposito: en modo nube el rol
+  // lo determina el servidor (la politica admin_select_all de supabase.sql), asi
+  // no hay que publicar correos personales en este archivo, que es publico.
+  ADMIN_EMAILS: [],
 
-  // Registro desde la app. Solo aplica en modo nube; sin nube no hay contraseñas.
-  ALLOW_SIGNUP: false,
+  // Registro desde la app ("Crear cuenta"). En true mientras dan de alta a los
+  // socios; ponlo en false cuando ya esten todos dentro.
+  ALLOW_SIGNUP: true,
 
   // Quien entra a la app. Cada uno elige su nombre y tiene SU propia cartera.
   // El "id" NO es un correo a proposito: este archivo se publica con la app y no
