@@ -25,9 +25,10 @@ window.APP_CONFIG = {
   // no hay que publicar correos personales en este archivo, que es publico.
   ADMIN_EMAILS: [],
 
-  // Registro desde la app ("Crear cuenta"). En true mientras dan de alta a los
-  // socios; ponlo en false cuando ya esten todos dentro.
-  ALLOW_SIGNUP: true,
+  // Registro desde la app ("Crear cuenta"). CERRADO: los socios ya estan dentro,
+  // asi nadie con el link puede crear cuentas. Ponlo en true si hay que dar de
+  // alta a alguien mas (y vuelvelo a cerrar despues).
+  ALLOW_SIGNUP: false,
 
   // Quien entra a la app. Cada uno elige su nombre y tiene SU propia cartera.
   // El "id" NO es un correo a proposito: este archivo se publica con la app y no
