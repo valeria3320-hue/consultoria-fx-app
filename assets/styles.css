@@ -405,5 +405,20 @@ label>select{width:100%}
 .eye-btn{position:absolute;right:2px;top:50%;transform:translateY(-50%);background:none;border:0;font-size:17px;cursor:pointer;padding:8px;min-width:40px;min-height:40px;color:var(--muted)}
 .linklike{background:none;border:0;color:var(--accent);cursor:pointer;font-size:13px;padding:8px 0;text-decoration:underline;width:100%;text-align:center}
 
+/* Verificación de contacto en la ficha (resultado de la llamada, en 2 clics) */
+.verif-box{background:var(--bg2);border:1px solid var(--line2);border-radius:10px;padding:12px;margin:12px 0}
+.verif-head{display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:12px}
+.verif-badge{font-size:11.5px;font-weight:700;padding:3px 10px;border-radius:20px;border:1px solid;white-space:nowrap}
+.verif-q{font-size:12.5px;color:var(--muted);margin-bottom:10px;line-height:1.4}
+.verif-q b{color:var(--text)}
+.verif-btns{display:flex;gap:7px;flex-wrap:wrap}
+.verif-b{flex:1 1 auto;min-height:40px;padding:8px 10px;border-radius:9px;font-size:12.5px;font-weight:600;
+  background:var(--panel);border:1px solid var(--line2);color:var(--text);transition:.12s;white-space:nowrap}
+.verif-b:hover{transform:translateY(-1px)}
+.verif-b.ok:hover{border-color:var(--green);color:var(--green)}
+.verif-b.cambio:hover{border-color:var(--accent);color:var(--accent)}
+.verif-b.no:hover{border-color:var(--red);color:var(--red)}
+@media(max-width:820px){.verif-b{flex:1 1 100%;min-height:44px;font-size:14px}}
+
 /* Aviso fijo: sin conexión / cambios sin guardar (no desaparece solo, a diferencia del toast) */
 .sync-banner{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#fff4e5;color:#92400e;border:1px solid var(--amber);padding:11px 20px;border-radius:10px;font-size:13px;font-weight:600;box-shadow:var(--shadow);z-index:100;max-width:92vw;text-align:center}

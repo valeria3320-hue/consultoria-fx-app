@@ -532,7 +532,7 @@ function renderClientes(){
     <td><div class="row-actions"><button class="icon-btn" data-client="${p.id}" title="Ficha">👁</button><button class="icon-btn" data-sched="${p.id}" title="Agendar cita">📅</button></div></td></tr>`).join('');
   $('#view-clientes').innerHTML=`
     <div class="filters">
-      <select id="f-datos"><option value="">Todos (datos)</option><option value="potencial" ${ui.filtroDatos==='potencial'?'selected':''}>⭐ Super potenciales</option><option value="operaba" ${ui.filtroDatos==='operaba'?'selected':''}>🔥 Ya operaban (reactivar)</option><option value="con" ${ui.filtroDatos==='con'?'selected':''}>Con datos de contacto</option><option value="email" ${ui.filtroDatos==='email'?'selected':''}>Con correo</option><option value="tel" ${ui.filtroDatos==='tel'?'selected':''}>Con teléfono</option><option value="sin" ${ui.filtroDatos==='sin'?'selected':''}>Solo nombre</option></select>
+      <select id="f-datos"><option value="">Todos (datos)</option><option value="potencial" ${ui.filtroDatos==='potencial'?'selected':''}>⭐ Super potenciales</option><option value="operaba" ${ui.filtroDatos==='operaba'?'selected':''}>🔥 Ya operaban (reactivar)</option><option value="porverif" ${ui.filtroDatos==='porverif'?'selected':''}>📞 Por verificar (cola de llamadas)</option><option value="verificados" ${ui.filtroDatos==='verificados'?'selected':''}>✓ Ya verificados</option><option value="con" ${ui.filtroDatos==='con'?'selected':''}>Con datos de contacto</option><option value="email" ${ui.filtroDatos==='email'?'selected':''}>Con correo</option><option value="tel" ${ui.filtroDatos==='tel'?'selected':''}>Con teléfono</option><option value="sin" ${ui.filtroDatos==='sin'?'selected':''}>Solo nombre</option></select>
       <select id="f-seg"><option value="">Todas las industrias</option>${segNames().map(s=>`<option ${ui.filtroSeg===s?'selected':''}>${s}</option>`).join('')}</select>
       <select id="f-etapa"><option value="">Todas las etapas</option>${STAGES.map(s=>`<option ${ui.filtroEtapa===s?'selected':''}>${s}</option>`).join('')}</select>
       <span class="muted">${arr.length} de ${state.prospects.length} · ⭐ ${superN} super · ${conDatos} con datos · ${sinDatos} solo nombre</span>
@@ -546,6 +546,61 @@ function renderClientes(){
 }
 
 /* ---------- DRAWER ficha ---------- */
+/* ---------- VERIFICACION DE CONTACTO ----------------------------------------
+   El dato de contacto viene del libro 2008-2020: mucha gente ya cambio de
+   empleo. La UNICA verificacion confiable es la llamada. Esto convierte el
+   resultado de esa llamada en dato, en 2 clics.
+   p.verif = {estado:'ok'|'cambio'|'nolocal', fecha:'YYYY-MM-DD'}
+---------------------------------------------------------------------------- */
+const VERIF_MESES = 12;   // tras un año, se vuelve a considerar "por verificar"
+function verifEstado(p){
+  const v=p.verif;
+  if(!v||!v.estado) return 'pendiente';
+  if(v.estado==='nolocal') return 'nolocal';
+  const d=daysFromToday(v.fecha);
+  if(d!==null && -d > VERIF_MESES*30) return 'caduco';   // verificado hace mucho
+  return v.estado;                                        // 'ok' | 'cambio'
+}
+const VERIF_BADGE={
+  ok:      ['✓ Contacto verificado','#16a34a'],
+  cambio:  ['↻ Contacto actualizado','#0d9488'],
+  nolocal: ['✗ No localizable','#dc2626'],
+  caduco:  ['⚠ Verificación vencida','#d97706'],
+  pendiente:['— Sin verificar','#64748b'],
+};
+// Registra el resultado de la llamada y lo deja en la linea de tiempo.
+function marcarVerif(id,estado,nuevoContacto){
+  const p=state.prospects.find(x=>x.id===id); if(!p)return;
+  p.verif={estado,fecha:todayISO()};
+  let nota;
+  if(estado==='ok') nota='✓ Verificado: '+(p.contacto||'el contacto')+' sigue en la empresa.';
+  else if(estado==='cambio'){
+    const antes=p.contacto||'(sin contacto)';
+    if(nuevoContacto&&nuevoContacto.nombre) p.contacto=nuevoContacto.nombre;
+    if(nuevoContacto&&nuevoContacto.puesto) p.puesto=nuevoContacto.puesto;
+    if(nuevoContacto&&nuevoContacto.telefono) p.telefono=nuevoContacto.telefono;
+    nota='↻ Contacto actualizado: antes '+antes+' → ahora '+(p.contacto||'—')+(p.puesto?(' ('+p.puesto+')'):'');
+  } else nota='✗ No se pudo localizar a nadie en esta empresa.';
+  p.actividades=p.actividades||[];
+  p.actividades.push({id:uid(),fecha:todayISO(),tipo:'Llamada',nota});
+  p.actualizado=todayISO();
+  save(); render();
+  if(!$('#drawer-client').classList.contains('hidden')) openClient(id);
+  toast(estado==='ok'?'Contacto verificado ✓':estado==='cambio'?'Contacto actualizado ✓':'Marcado como no localizable');
+}
+function bloqueVerif(p){
+  const st=verifEstado(p), [txt,color]=VERIF_BADGE[st];
+  const fecha=(p.verif&&p.verif.fecha)?` <span class="muted">· ${p.verif.fecha}</span>`:'';
+  return `<div class="verif-box">
+    <div class="verif-head"><span class="verif-badge" style="color:${color};border-color:${color}">${txt}</span>${fecha}</div>
+    <div class="verif-q">Al llamar, pregunta por <b>${esc(p.contacto||'quien lleva tesorería')}</b>. ¿Qué te dijeron?</div>
+    <div class="verif-btns">
+      <button class="verif-b ok"     data-verif="ok">✓ Sigue ahí</button>
+      <button class="verif-b cambio" data-verif="cambio">↻ Es otra persona</button>
+      <button class="verif-b no"     data-verif="nolocal">✗ No localizable</button>
+    </div>
+  </div>`;
+}
 function openClient(id){
   const p=state.prospects.find(x=>x.id===id); if(!p)return;
   const acts=(p.actividades||[]).slice().sort((a,b)=>(b.fecha||'').localeCompare(a.fecha||''));
@@ -559,6 +614,7 @@ function openClient(id){
       <div class="drawer-row"><span class="muted">Industria</span><span>${esc(p.segmento||'—')}</span></div>
       <div class="drawer-row"><span class="muted">Teléfono</span><span>${esc(p.telefono||'—')}</span></div>
       ${waPhone?`<div class="drawer-contact"><a class="contact-btn" href="tel:${waPhone}">📞 Llamar</a><a class="contact-btn wa" href="https://wa.me/${waPhone}" target="_blank">💬 WhatsApp</a>${p.email?`<a class="contact-btn" href="mailto:${esc(p.email)}">✉️ Correo</a>`:''}</div>`:''}
+      ${bloqueVerif(p)}
       <div class="drawer-row"><span class="muted">Email</span><span>${p.email?`<a class="mini-link" href="mailto:${esc(p.email)}">${esc(p.email)}</a>`:'—'}</span></div>
       <div class="drawer-row"><span class="muted">Productos</span><span>${(p.productos||[]).map(pr=>`<span class="tag">${esc(prodName(pr))}</span>`).join(' ')||'—'}</span></div>
       <div class="drawer-row"><span class="muted">Próxima acción</span><span>${esc(p.proximaAccion||'—')} ${p.fechaProxima?`<span class="tag">${p.fechaProxima}</span>`:''}</span></div>
@@ -576,6 +632,16 @@ function openClient(id){
   $('#drawer-edit').onclick=()=>{closeDrawer();openProspect(id);};
   $('#drawer-del').onclick=()=>{ if(confirm('¿Eliminar este cliente? No se puede deshacer.')){ state.prospects=state.prospects.filter(x=>x.id!==id); save(); closeDrawer(); render(); toast('Cliente eliminado'); } };
   $$('#drawer-client [data-setstage]').forEach(b=>b.onclick=()=>{ if(b.dataset.setstage!==p.etapa){ closeDrawer(); openMove(id,b.dataset.setstage); } });
+  // Verificación de contacto: registra el resultado de la llamada.
+  $$('#drawer-client [data-verif]').forEach(b=>b.onclick=()=>{
+    const est=b.dataset.verif;
+    if(est!=='cambio') return marcarVerif(id,est);
+    const nombre=prompt('¿Con quién hay que hablar ahora?\n(nombre de la persona, o "Tesorería" si no te lo dieron)', '');
+    if(nombre===null) return;                       // canceló
+    const puesto=prompt('¿Qué puesto tiene? (opcional)','')||'';
+    const tel=prompt('¿Te dieron teléfono o extensión? (opcional)','')||'';
+    marcarVerif(id,'cambio',{nombre:nombre.trim(),puesto:puesto.trim(),telefono:tel.trim()||p.telefono});
+  });
 }
 function closeDrawer(){ $('#drawer-client').classList.add('hidden'); $('#drawer-overlay').classList.add('hidden'); }
 
@@ -1492,6 +1558,11 @@ function closeModals(){$$('.modal-overlay').forEach(m=>m.classList.add('hidden')
 /* ---------- FILTROS / GLOBAL / DATOS ---------- */
 function filtered(){let arr=state.prospects;const q=ui.search.toLowerCase().trim();if(q)arr=arr.filter(p=>(p.empresa+' '+(p.contacto||'')+' '+(p.email||'')).toLowerCase().includes(q));if(ui.filtroSeg)arr=arr.filter(p=>p.segmento===ui.filtroSeg);if(ui.filtroProd)arr=arr.filter(p=>(p.productos||[]).includes(ui.filtroProd));if(ui.filtroEtapa)arr=arr.filter(p=>p.etapa===ui.filtroEtapa);
   if(ui.filtroDatos==='con')arr=arr.filter(p=>compScore(p)>0);else if(ui.filtroDatos==='sin')arr=arr.filter(p=>compScore(p)===0);else if(ui.filtroDatos==='email')arr=arr.filter(p=>p.email);else if(ui.filtroDatos==='tel')arr=arr.filter(p=>p.telefono);else if(ui.filtroDatos==='potencial')arr=arr.filter(p=>p.potencial==='alto');else if(ui.filtroDatos==='operaba')arr=arr.filter(p=>operabaScore(p)>0).sort((a,b)=>operabaScore(b)-operabaScore(a));
+  // Cola de llamadas: los que faltan por verificar, con teléfono primero y los
+  // mejores (ya operaron coberturas) arriba.
+  else if(ui.filtroDatos==='porverif')arr=arr.filter(p=>{const e=verifEstado(p);return e==='pendiente'||e==='caduco';})
+    .sort((a,b)=>(operabaScore(b)-operabaScore(a))||((b.telefono?1:0)-(a.telefono?1:0))||((b.potencial==='alto')-(a.potencial==='alto')));
+  else if(ui.filtroDatos==='verificados')arr=arr.filter(p=>['ok','cambio'].includes(verifEstado(p)));
   return arr;}
 function empty(msg){return `<div class="empty">${msg}</div>`;}
 function bindRowClicks(){$$('[data-client]').forEach(el=>el.onclick=e=>{if(e.target.closest('[data-sched]'))return;openClient(el.dataset.client);});}
