@@ -1534,14 +1534,59 @@ function submitIndustry(e){e.preventDefault();const d=Object.fromEntries(new For
 
 /* ---------- MODAL PROSPECTO / ACTIVIDAD ---------- */
 function fillSelect(sel,items,val){sel.innerHTML=items.map(i=>`<option ${i===val?'selected':''}>${esc(i)}</option>`).join('');}
-function openProspect(id){
+function openProspect(id,prefill){
   const f=$('#form-prospect');f.reset();fillSelect($('#sel-segmento'),segNames());fillSelect($('#sel-etapa'),STAGES);
   const p=id?state.prospects.find(x=>x.id===id):null;
   $('#modal-prospect-title').textContent=p?'Editar cliente':'Nuevo cliente';
   $('#chips-productos').innerHTML=state.products.map(pr=>`<span class="chip ${p&&(p.productos||[]).includes(pr.id)?'on':''}" data-prod="${pr.id}">${esc(shortName(pr.nombre))}</span>`).join('');
   $$('#chips-productos .chip').forEach(c=>c.onclick=()=>c.classList.toggle('on'));
   if(p){for(const k in p)if(f.elements[k]&&typeof p[k]!=='object')f.elements[k].value=p[k]??'';}else f.elements.fechaProxima.value=todayISO();
+  // Prellenado desde el escaner de tarjetas (solo cliente nuevo): rellena lo que venga, respeta lo que ya haya.
+  if(prefill){ for(const k in prefill){ if(f.elements[k]&&prefill[k]!=null&&prefill[k]!=='') f.elements[k].value=prefill[k]; } }
   updateRevenuePreview();$('#modal-prospect').classList.remove('hidden');
+}
+
+/* ---------- ESCANER DE TARJETAS (camara + IA) -------------------------------
+   La foto va a NUESTRA funcion serverless (que guarda la llave de la IA en
+   secreto), la IA lee la tarjeta y devuelve los campos. La foto no se guarda.
+   Solo funciona en el sitio publicado (Netlify), no en localhost. --------- */
+// Reduce la imagen antes de subirla: mas rapido y mas barato en tokens.
+function fileToScaledBase64(file,maxPx){
+  return new Promise((resolve,reject)=>{
+    const url=URL.createObjectURL(file), img=new Image();
+    img.onload=()=>{
+      URL.revokeObjectURL(url);
+      let w=img.naturalWidth||img.width, h=img.naturalHeight||img.height;
+      const s=Math.min(1,maxPx/Math.max(w,h)); w=Math.round(w*s); h=Math.round(h*s);
+      const c=document.createElement('canvas'); c.width=w; c.height=h;
+      c.getContext('2d').drawImage(img,0,0,w,h);
+      const durl=c.toDataURL('image/jpeg',0.85);
+      resolve({b64:durl.split(',')[1],mime:'image/jpeg'});
+    };
+    img.onerror=()=>{ URL.revokeObjectURL(url); reject(new Error('imagen invalida')); };
+    img.src=url;
+  });
+}
+async function scanCard(file){
+  if(!file) return;
+  toast('📸 Leyendo la tarjeta…');
+  let payload;
+  try{ payload=await fileToScaledBase64(file,1600); }
+  catch(e){ toast('No se pudo abrir la imagen'); return; }
+  try{
+    const r=await fetch('/.netlify/functions/scan-card',{
+      method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({image:payload.b64,media_type:payload.mime}),
+    });
+    if(r.status===404){ toast('El escaner aun no esta publicado o no corre en localhost. Abre el sitio de Netlify.'); return; }
+    const data=await r.json().catch(()=>({error:'respuesta invalida'}));
+    if(!r.ok||data.error){
+      if(data.error==='no_key'){ toast('Falta configurar la llave de la IA en Netlify (te paso los pasos).'); return; }
+      toast('No se pudo leer la tarjeta: '+(data.detail||data.error||('error '+r.status))); return;
+    }
+    openProspect(null,data);
+    toast('Tarjeta leida ✓ Revisa los datos y guarda');
+  }catch(e){ toast('Sin conexion con el escaner: '+e.message); }
 }
 function updateRevenuePreview(){const f=$('#form-prospect');const n=Number(f.elements.notional.value)||0,b=Number(f.elements.feeBps.value)||0;$('#revenue-preview').textContent=n&&b?`Ingreso estimado: ${fmtUSD(Math.round(n*b/10000))} (${b} bps sobre ${fmtUSD(n)})`:'Ingreso estimado: —';}
 function submitProspect(e){
@@ -1570,6 +1615,7 @@ function bindRowClicks(){$$('[data-client]').forEach(el=>el.onclick=e=>{if(e.tar
 function bindGlobal(){
   $$('.nav-btn').forEach(b=>b.onclick=()=>{ui.view=b.dataset.view;render();});
   $('#btn-new-prospect').onclick=()=>openProspect(null);
+  { const sc=$('#btn-scan-card'), cf=$('#card-file'); if(sc&&cf){ sc.onclick=()=>cf.click(); cf.onchange=e=>{ const f=e.target.files[0]; e.target.value=''; scanCard(f); }; } }
   $('#global-search').oninput=e=>{ui.search=e.target.value;if(['clientes','pipeline'].includes(ui.view))render();};
   $('#form-prospect').onsubmit=submitProspect; $('#form-prospect').addEventListener('input',updateRevenuePreview);
   $('#form-activity').onsubmit=submitActivity; $('#form-product').onsubmit=submitProduct; $('#form-industry').onsubmit=submitIndustry;

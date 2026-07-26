@@ -5,9 +5,14 @@
 [build]
   publish = "."
   # OPTIMIZACION 1 — saltar el deploy si el push NO toca lo que sirve el sitio.
-  # (documentos .md, scripts .ps1, SQL, etc. no re-publican nada.)
+  # (documentos .md, scripts .ps1, SQL, base local, etc. no re-publican nada.)
   # git diff sale 0 = "sin cambios relevantes" -> Netlify cancela el build (no gasta cuota).
-  ignore = "git diff --quiet HEAD^ HEAD -- index.html manifest.json netlify.toml assets/"
+  # 'netlify/' incluido para que los cambios a las funciones serverless SI redeployen.
+  ignore = "git diff --quiet HEAD^ HEAD -- index.html manifest.json netlify.toml assets/ netlify/"
+
+# Funciones serverless (escaner de tarjetas). Directorio por defecto: netlify/functions.
+[functions]
+  node_bundler = "esbuild"
 
 # OPTIMIZACION 2 — caché con revalidacion:
 # el navegador NO re-descarga si el archivo no cambio (respuesta 304, sin cuerpo = ahorra
