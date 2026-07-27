@@ -1756,6 +1756,8 @@ function saveCardsBatch(){
 function renderTarjetas(){
   const t=bandeja();
   const lista=ui.tjVista!=='pipeline';
+  // Cuantas sobran por repetidas, para avisar en el propio boton.
+  const dups=gruposDuplicados(t.filter(p=>p&&p.empresa)).reduce((a,g)=>a+g.length-1,0);
   $('#view-tarjetas').innerHTML=`
     <div class="tj-bar">
       <div class="seg-toggle">
@@ -1765,6 +1767,7 @@ function renderTarjetas(){
       <div class="tj-bar-acts">
         <span class="muted">${t.length} tarjeta(s) · aparte de tu cartera</span>
         ${t.length?`<button class="ghost-btn btn-sm" id="tj-seg">🏷️ Clasificar industrias</button>`:''}
+        ${t.length?`<button class="ghost-btn btn-sm" id="tj-dup">🔀 Depurar repetidas${dups?` (${dups})`:''}</button>`:''}
         ${t.length?`<button class="primary-btn btn-sm" id="tj-all">✓ Pasar todas a Clientes</button>`:''}
       </div>
     </div>
@@ -1772,6 +1775,7 @@ function renderTarjetas(){
   $$('#view-tarjetas [data-tjv]').forEach(b=>b.onclick=()=>{ ui.tjVista=b.dataset.tjv; render(); });
   { const a=$('#tj-all'); if(a)a.onclick=()=>{ if(confirm(`¿Pasar las ${t.length} tarjetas a Clientes?\n\nDejarán la sección Tarjetas y entrarán a tu cartera (pipeline, Mi Día y métricas).`)) pasarTarjetas(t.map(p=>p.id)); }; }
   { const s=$('#tj-seg'); if(s)s.onclick=()=>clasificarIndustrias(t); }
+  { const d=$('#tj-dup'); if(d)d.onclick=()=>depurarDuplicados(t); }
   if(!t.length){ $('#tj-body').innerHTML=`<div class="panel">${empty('Aún no hay tarjetas escaneadas. Usa 📸 Escanear tarjeta, arriba.')}</div>`; return; }
   if(lista) renderClientes('#view-tarjetas #tj-body'); else renderPipeline('#view-tarjetas #tj-body');
 }
@@ -1820,6 +1824,77 @@ function pasarTarjetas(ids){
   save(); render();
   toast(n+' pasada(s) a Clientes ✓');
 }
+/* ---------- Tarjetas repetidas ----------
+   Escanear dos veces la misma tarjeta (o dos fotos donde sale la misma) deja
+   registros duplicados. Se agrupan por empresa+contacto normalizados y tambien
+   por telefono o correo iguales — asi cae la misma persona aunque el OCR haya
+   leido el nombre distinto. OJO: empresa igual con contacto DISTINTO no es
+   duplicado (son dos personas de la misma empresa).
+   No se borra a ciegas: se funde el grupo en el registro mas completo. */
+const normTel=s=>(s||'').toString().replace(/\D/g,'').slice(-10);
+const normMail=s=>(s||'').toString().trim().toLowerCase();
+// Que tan lleno esta un registro; decide cual sobrevive a la fusion.
+function completitud(p){
+  let n=0;
+  ['empresa','contacto','puesto','telefono','email','segmento','notas']
+    .forEach(k=>{ if((p[k]||'').toString().trim()) n++; });
+  return n+Math.min(5,(p.actividades||[]).length);
+}
+function gruposDuplicados(lista){
+  const padre=new Map();
+  lista.forEach(p=>padre.set(p.id,p.id));
+  const raiz=x=>{ while(padre.get(x)!==x) x=padre.get(x); return x; };
+  const une=(a,b)=>{ const ra=raiz(a), rb=raiz(b); if(ra!==rb) padre.set(ra,rb); };
+  const vistas=new Map();
+  // Solo se marca con claves NO vacias: si no, todas las tarjetas sin telefono
+  // acabarian unidas entre si.
+  const marca=(k,id)=>{ if(vistas.has(k)) une(vistas.get(k),id); else vistas.set(k,id); };
+  lista.forEach(p=>{
+    const emp=normEmp(p.empresa);
+    if(emp) marca('n:'+emp+'|'+normEmp(p.contacto), p.id);
+    const tel=normTel(p.telefono); if(tel.length>=8) marca('t:'+tel, p.id);
+    const mail=normMail(p.email);  if(mail) marca('m:'+mail, p.id);
+  });
+  const g=new Map();
+  lista.forEach(p=>{ const r=raiz(p.id); if(!g.has(r))g.set(r,[]); g.get(r).push(p); });
+  return [...g.values()].filter(x=>x.length>1);
+}
+// Funde un grupo en su registro mas completo y devuelve los ids a eliminar.
+function fusionarGrupo(grupo){
+  const orden=grupo.slice().sort((a,b)=>completitud(b)-completitud(a));
+  const queda=orden[0];
+  orden.slice(1).forEach(o=>{
+    ['empresa','contacto','puesto','telefono','email','segmento'].forEach(k=>{
+      if(!(queda[k]||'').toString().trim() && (o[k]||'').toString().trim()) queda[k]=o[k];
+    });
+    const nn=(o.notas||'').trim();
+    if(nn && !(queda.notas||'').includes(nn)) queda.notas=((queda.notas||'').trim()+'\n'+nn).trim();
+    queda.actividades=queda.actividades||[];
+    (o.actividades||[]).forEach(a=>{ if(!queda.actividades.some(x=>x.id===a.id)) queda.actividades.push(a); });
+    if(o.perfil&&!queda.perfil) queda.perfil=o.perfil;
+    if(o.verif &&!queda.verif ) queda.verif =o.verif;
+    if((Number(o.notional)||0)>(Number(queda.notional)||0)) queda.notional=o.notional;
+    if(o.potencial==='alto') queda.potencial='alto';
+  });
+  queda.actualizado=todayISO();
+  return orden.slice(1).map(p=>p.id);
+}
+function depurarDuplicados(lista){
+  const grupos=gruposDuplicados((lista||[]).filter(p=>p&&p.empresa));
+  if(!grupos.length){ toast('No hay tarjetas repetidas ✓'); return; }
+  const sobran=grupos.reduce((a,g)=>a+g.length-1,0);
+  const muestra=grupos.slice(0,12)
+    .map(g=>'• '+g.map(p=>p.empresa+(p.contacto?' / '+p.contacto:'')).join('  ⟷  ')).join('\n');
+  if(!confirm(`${grupos.length} grupo(s) repetido(s) · se quitarían ${sobran} tarjeta(s):\n\n${muestra}`
+    +`${grupos.length>12?'\n… y '+(grupos.length-12)+' más':''}`
+    +`\n\nSe queda la más completa de cada grupo y se le copian los datos, notas y actividades de las otras. ¿Depurar?`)) return;
+  const quitar=new Set();
+  grupos.forEach(g=>fusionarGrupo(g).forEach(id=>quitar.add(id)));
+  state.prospects=(state.prospects||[]).filter(p=>!quitar.has(p.id));
+  save(); render();
+  toast(`${quitar.size} repetida(s) fusionada(s) ✓`);
+}
+
 function updateRevenuePreview(){const f=$('#form-prospect');const n=Number(f.elements.notional.value)||0,b=Number(f.elements.feeBps.value)||0;$('#revenue-preview').textContent=n&&b?`Ingreso estimado: ${fmtUSD(Math.round(n*b/10000))} (${b} bps sobre ${fmtUSD(n)})`:'Ingreso estimado: —';}
 function submitProspect(e){
   e.preventDefault();const f=e.target;const d=Object.fromEntries(new FormData(f).entries());const prods=$$('#chips-productos .chip.on').map(c=>c.dataset.prod);
