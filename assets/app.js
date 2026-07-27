@@ -41,17 +41,26 @@ const COT_TIPOS = {
 
 /* ---------- Estado / sesión ---------- */
 let state, ME=null, saveTimer=null;
-let ui = { view:'midia', search:'', filtroSeg:'', filtroProd:'', filtroEtapa:'', filtroDatos:'', noteFmt:'whatsapp', noteModo:'apertura', noteAlcance:'industria', noteIndustria:'', cotTipo:'ahorro', cotCliente:'', cotText:'', perfCliente:'', perfText:'', perfData:null, propJugada:'fx_importador', propCliente:'', propText:'', propData:null };
+let ui = { view:'midia', search:'', filtroSeg:'', filtroProd:'', filtroEtapa:'', filtroDatos:'', noteFmt:'whatsapp', noteModo:'apertura', noteAlcance:'industria', noteIndustria:'', cotTipo:'ahorro', cotCliente:'', cotText:'', perfCliente:'', perfText:'', perfData:null, tjVista:'lista', propJugada:'fx_importador', propCliente:'', propText:'', propData:null };
 
 function migrate(s){
   if(!s.brand) s.brand='Insitum Capital';
-  // BANDEJA DE TARJETAS: division aparte, NO se mezcla con la cartera.
-  if(!s.tarjetas) s.tarjetas=[];
-  // Rescate una sola vez: lo escaneado antes de existir la bandeja vivia en
-  // prospects con fuente 'Tarjeta'. Se mueve aqui (y ya no vuelve a ocurrir,
-  // porque al moverlo desaparece de prospects).
-  { const mov=(s.prospects||[]).filter(p=>p.fuente==='Tarjeta');
-    if(mov.length){ s.tarjetas=mov.concat(s.tarjetas); s.prospects=(s.prospects||[]).filter(p=>p.fuente!=='Tarjeta'); } }
+  // TARJETAS: viven en la MISMA lista que los clientes pero marcadas con
+  // esTarjeta=true. Asi heredan ficha, actividades, etapas y pipeline; y se
+  // muestran en su propia seccion, sin mezclarse con la cartera.
+  s.prospects=s.prospects||[];
+  // Rescate de la bandeja separada anterior -> se integran marcadas.
+  if(s.tarjetas&&s.tarjetas.length){
+    s.tarjetas.forEach(c=>s.prospects.unshift(Object.assign({
+      id:uid(),empresa:'',contacto:'',puesto:'',telefono:'',email:'',fuente:'Tarjeta',
+      segmento:'',etapa:'Cliente nuevo',productos:[],notional:0,feeBps:25,probabilidad:10,
+      proximaAccion:'Primer contacto',fechaProxima:'',notas:'',creado:todayISO(),
+      actividades:[],stageHistory:[]
+    },c,{esTarjeta:true})));
+  }
+  s.tarjetas=[];
+  // Lo escaneado antes de existir la seccion quedo con fuente 'Tarjeta'.
+  (s.prospects||[]).forEach(p=>{ if(p.fuente==='Tarjeta'&&p.esTarjeta===undefined)p.esTarjeta=true; });
   if(!s.products||!s.products.length) s.products=defaultProducts();
   if(!s.industries||!s.industries.length) s.industries=defaultIndustries();
   if(!s.market) s.market={};
@@ -193,6 +202,12 @@ function segNames(){ return state.industries.map(i=>i.name); }
 function prodName(id){ const p=state.products.find(x=>x.id===id); return p?shortName(p.nombre):id; }
 function shortName(n){ return n.split(' (')[0].split(' &')[0].split(' –')[0]; }
 function brand(){ return (state&&state.brand)||'Insitum Capital'; }
+/* CARTERA vs TARJETAS: una sola lista con marca esTarjeta. La cartera (clientes
+   de verdad) alimenta pipeline, Mi Dia y metricas; las tarjetas viven aparte. */
+function cartera(){ return (state.prospects||[]).filter(p=>!p.esTarjeta); }
+function bandeja(){ return (state.prospects||[]).filter(p=>p.esTarjeta); }
+// Lista sobre la que trabajan tabla/kanban/filtros segun la seccion abierta.
+function scopeList(){ return ui.view==='tarjetas' ? bandeja() : cartera(); }
 // Nombre para saludo/avatar a partir del correo, sin exponer correos en config.js.
 // "valeria3320@gmail.com" -> "Valeria" · "gori_mx@hotmail.com" -> "Gori"
 function displayName(email){
@@ -215,7 +230,7 @@ const FUNNEL={reunion:.08,propuesta:.50,cierre:.30};
 function habilesMTD(){ const t=new Date(); let n=0; for(let d=1;d<=t.getDate();d++){const w=new Date(t.getFullYear(),t.getMonth(),d).getDay(); if(w>0&&w<6)n++;} return Math.max(1,n); }
 function planData(){
   const c=planCfg();
-  const activos=state.prospects.filter(isWon).length;
+  const activos=cartera().filter(isWon).length;
   const metaCli=Math.max(1,Math.ceil(c.metaMes/c.ingresoProm));
   const faltan=Math.max(0,metaCli-activos);
   const cierresMes=faltan/Math.max(1,c.horizonte);
@@ -223,7 +238,7 @@ function planData(){
   const toqMes=Math.ceil(cierresMes/FUNNEL.cierre/FUNNEL.propuesta/FUNNEL.reunion);
   const toqDia=faltan?Math.max(5,Math.ceil(toqMes/20)):5;
   const t=todayISO(), mes=t.slice(0,7);
-  const acts=state.prospects.flatMap(p=>p.actividades||[]).filter(a=>a.tipo!=='Nota');
+  const acts=cartera().flatMap(p=>p.actividades||[]).filter(a=>a.tipo!=='Nota');
   const toquesHoy=acts.filter(a=>a.fecha===t).length;
   const toquesMTD=acts.filter(a=>(a.fecha||'').slice(0,7)===mes).length;
   const esperadoMTD=toqDia*habilesMTD();
@@ -318,7 +333,7 @@ function render(){
   const titles={midia:['Mi Día','Tu plan de acción de hoy'],resumen:['Resumen','Salud de tu cartera'],pipeline:['Pipeline','Arrastra clientes por la cadena'],clientes:['Clientes','CRM: ficha completa'],tarjetas:['Tarjetas','Escaneadas, aparte de tu cartera — revísalas y pásalas a Clientes'],propuestas:['Propuestas','Genera una propuesta de valor en segundos'],cotizador:['Cotizador','Calcula y envía cotizaciones'],perfilador:['Perfilador','Califica prospectos en 2 minutos: exposición, dolor y decisión'],seguimiento:['Seguimiento','Tu agenda de acciones'],notas:['Notas de mercado','Apertura y cierre por industria'],productos:['Productos','Catálogo editable'],equipo:['Equipo','Cartera consolidada de socios'],playbook:['Playbook','Metodología'],ajustes:['Ajustes','Marca, industrias y datos']};
   $('#view-title').textContent=titles[ui.view][0]; $('#view-sub').textContent=titles[ui.view][1];
   // Contador de la bandeja en el menu
-  { const b=$('#nav-tarjetas-n'), n=(state.tarjetas||[]).length; if(b){ b.textContent=n; b.classList.toggle('hidden',!n); } }
+  { const b=$('#nav-tarjetas-n'), n=bandeja().length; if(b){ b.textContent=n; b.classList.toggle('hidden',!n); } }
   ({midia:renderMiDia,resumen:renderResumen,pipeline:renderPipeline,clientes:renderClientes,tarjetas:renderTarjetas,propuestas:renderPropuestas,cotizador:renderCotizador,perfilador:renderPerfilador,seguimiento:renderSeguimiento,notas:renderNotas,productos:renderProductos,equipo:renderEquipo,playbook:renderPlaybook,ajustes:renderAjustes}[ui.view])();
 }
 
@@ -334,14 +349,14 @@ function nextStep(p){
 function renderMiDia(){
   const hora=new Date().getHours(); const saludo=hora<12?'Buenos días':hora<19?'Buenas tardes':'Buenas noches';
   const nombre=userName(ME.email).split(' ')[0];
-  const open=state.prospects.filter(p=>OPEN_STAGES.includes(p.etapa));
+  const open=cartera().filter(p=>OPEN_STAGES.includes(p.etapa));
   const ws=open.map(p=>({p,s:nextStep(p)}));
   const vencidas=ws.filter(x=>x.s.urg==='vencida').sort((a,b)=>a.s.dias-b.s.dias).map(x=>x.p);
   const hoy=ws.filter(x=>x.s.urg==='hoy').map(x=>x.p);
   const superPend=open.filter(p=>p.potencial==='alto'&&!p.fechaProxima&&!(p.actividades||[]).length);
-  const nuevos=state.prospects.filter(p=>p.etapa==='Cliente nuevo'&&!p.fechaProxima&&!(p.actividades||[]).length).sort((a,b)=>((b.potencial==='alto')-(a.potencial==='alto'))||(compScore(b)-compScore(a)));
-  const perdidosReact=state.prospects.filter(p=>p.etapa==='Perdido'&&p.fechaProxima);
-  const reactivar=state.prospects.filter(p=>p.etapa==='Cliente nuevo'&&!(p.actividades||[]).length&&operabaScore(p)>0).sort((a,b)=>(operabaScore(b)-operabaScore(a))||(compScore(b)-compScore(a)));
+  const nuevos=cartera().filter(p=>p.etapa==='Cliente nuevo'&&!p.fechaProxima&&!(p.actividades||[]).length).sort((a,b)=>((b.potencial==='alto')-(a.potencial==='alto'))||(compScore(b)-compScore(a)));
+  const perdidosReact=cartera().filter(p=>p.etapa==='Perdido'&&p.fechaProxima);
+  const reactivar=cartera().filter(p=>p.etapa==='Cliente nuevo'&&!(p.actividades||[]).length&&operabaScore(p)>0).sort((a,b)=>(operabaScore(b)-operabaScore(a))||(compScore(b)-compScore(a)));
   const PD=planData();
   const semColor=PD.ritmo>=.9?'var(--green)':PD.ritmo>=.6?'var(--amber)':'var(--red)';
   const semTxt=PD.faltan===0?'🏆 Meta de clientes cubierta — cuida la recurrencia':PD.ritmo>=.9?'✅ A este ritmo llegas a la meta':PD.ritmo>=.6?'⚠️ Vas abajo del ritmo — sube los toques de hoy':'🔴 Muy abajo del ritmo — hoy es día de llamadas';
@@ -404,7 +419,7 @@ async function generarNoticiasDia(){
   const brief=buildAperturaBrief(mk,state.news);
   const conCli=state.industries.filter(i=>state.prospects.some(p=>p.segmento===i.name));
   const inds=conCli.length?conCli:state.industries;
-  const list=inds.map(ind=>({name:ind.name,txt:buildIndustryNote(ind,'apertura','whatsapp',mk),n:state.prospects.filter(p=>p.segmento===ind.name&&p.telefono).length}));
+  const list=inds.map(ind=>({name:ind.name,txt:buildIndustryNote(ind,'apertura','whatsapp',mk),n:cartera().filter(p=>p.segmento===ind.name&&p.telefono).length}));
   window.__news=[brief,...list.map(x=>x.txt)];
   const card=(name,sub,txt,i,full)=>`<div class="news-card${full?' news-card-full':''}"><div class="news-head"><b>${esc(name)}</b><span class="muted">${esc(sub)}</span></div><div class="news-note">${esc(txt)}</div><div class="news-actions"><button class="btn-sm" data-copynews="${i}">📋 Copiar</button><a class="btn-sm" target="_blank" href="https://wa.me/?text=${encodeURIComponent(txt)}">▶ WhatsApp</a></div></div>`;
   const noNews=!(state.news&&((state.news.intl||[]).length||(state.news.local||[]).length));
@@ -417,9 +432,9 @@ async function generarNoticiasDia(){
 }
 function mandarReporte(){
   const t=todayISO();
-  const acts=state.prospects.flatMap(p=>(p.actividades||[]).filter(a=>a.fecha===t).map(a=>({tipo:a.tipo,emp:p.empresa})));
+  const acts=cartera().flatMap(p=>(p.actividades||[]).filter(a=>a.fecha===t).map(a=>({tipo:a.tipo,emp:p.empresa})));
   const reuniones=acts.filter(a=>a.tipo==='Reunión').length;
-  const ganados=state.prospects.filter(p=>(p.ganadoFecha||'')===t||(p.operacion&&p.operacion.fecha===t));
+  const ganados=cartera().filter(p=>(p.ganadoFecha||'')===t||(p.operacion&&p.operacion.fecha===t));
   const ganancia=ganados.reduce((s,p)=>s+(p.operacion?(p.operacion.ganancia||0):revenueOf(p)),0);
   const pend=pendingActivities().filter(a=>a.dias<=0).length;
   const nombre=userName(ME.email).split(' ')[0];
@@ -436,17 +451,17 @@ function mandarReporte(){
 
 /* ---------- RESUMEN ---------- */
 function renderResumen(){
-  const open=state.prospects.filter(p=>OPEN_STAGES.includes(p.etapa));
+  const open=cartera().filter(p=>OPEN_STAGES.includes(p.etapa));
   const pipeline=open.reduce((s,p)=>s+revenueOf(p),0);
   const ponderado=open.reduce((s,p)=>s+revenueOf(p)*(Number(p.probabilidad)||0)/100,0);
-  const won=state.prospects.filter(isWon), lost=state.prospects.filter(p=>p.etapa==='Perdido');
+  const won=cartera().filter(isWon), lost=cartera().filter(p=>p.etapa==='Perdido');
   const mes=new Date().toISOString().slice(0,7);
   const wonMes=won.filter(p=>(p.ganadoFecha||'').slice(0,7)===mes).reduce((s,p)=>s+revenueOf(p),0);
   const wonTotal=won.reduce((s,p)=>s+revenueOf(p),0);
   const conv=(won.length+lost.length)?Math.round(won.length/(won.length+lost.length)*100):0;
   const acts=pendingActivities(); const overdue=acts.filter(a=>a.dias<0).length,hoy=acts.filter(a=>a.dias===0).length,semana=acts.filter(a=>a.dias>0&&a.dias<=7).length;
-  const etapaSeg=STAGES.map(s=>({label:s,value:state.prospects.filter(p=>p.etapa===s).length,color:STAGE_COLOR[s]})).filter(x=>x.value>0);
-  const totalCli=state.prospects.length;
+  const etapaSeg=STAGES.map(s=>({label:s,value:cartera().filter(p=>p.etapa===s).length,color:STAGE_COLOR[s]})).filter(x=>x.value>0);
+  const totalCli=cartera().length;
   const indCounts={}; state.prospects.forEach(p=>{const k=p.segmento||'—';indCounts[k]=(indCounts[k]||0)+1;});
   const indTop=Object.entries(indCounts).sort((a,b)=>b[1]-a[1]).slice(0,8); const indMax=Math.max(1,...indTop.map(x=>x[1]));
   $('#view-resumen').innerHTML=`
@@ -475,25 +490,25 @@ function donut(segments,size=168,thick=24){
   return `<svg class="donut" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}"><circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="#e8edf3" stroke-width="${thick}"/>${arcs}<text x="${c}" y="${c-2}" text-anchor="middle" fill="#1b2430" font-size="30" font-weight="800">${total}</text><text x="${c}" y="${c+19}" text-anchor="middle" fill="#64748b" font-size="11.5">clientes</text></svg>`;
 }
 function funnelRows(){
-  const max=Math.max(1,...STAGES.map(s=>state.prospects.filter(p=>p.etapa===s).length));
-  return STAGES.map(s=>{const arr=state.prospects.filter(p=>p.etapa===s),val=arr.reduce((a,p)=>a+revenueOf(p),0),w=Math.max(3,arr.length/max*100);
+  const max=Math.max(1,...STAGES.map(s=>cartera().filter(p=>p.etapa===s).length));
+  return STAGES.map(s=>{const arr=cartera().filter(p=>p.etapa===s),val=arr.reduce((a,p)=>a+revenueOf(p),0),w=Math.max(3,arr.length/max*100);
     return `<div class="funnel-row"><span>${s}</span><div class="funnel-bar" style="width:${w}%;background:linear-gradient(90deg,${STAGE_COLOR[s]}99,${STAGE_COLOR[s]})">${arr.length||''}</div><span class="muted" style="text-align:right">${fmtUSD(val)}</span></div>`;}).join('');
 }
 function topOps(){
-  const open=state.prospects.filter(p=>OPEN_STAGES.includes(p.etapa)).map(p=>({p,w:revenueOf(p)*(Number(p.probabilidad)||0)/100})).sort((a,b)=>b.w-a.w).slice(0,6);
+  const open=cartera().filter(p=>OPEN_STAGES.includes(p.etapa)).map(p=>({p,w:revenueOf(p)*(Number(p.probabilidad)||0)/100})).sort((a,b)=>b.w-a.w).slice(0,6);
   if(!open.length)return empty('Aún no hay oportunidades abiertas.');
   return open.map(({p,w})=>`<div class="list-item" data-client="${p.id}" style="cursor:pointer"><div><strong>${esc(p.empresa)}</strong> <span class="tag">${esc(p.etapa)}</span><div class="meta">${esc(p.contacto||'—')} · ${esc(p.segmento||'')}</div></div><div style="text-align:right"><div style="color:var(--gold);font-weight:700">${fmtUSD(w)}</div><div class="meta">${p.probabilidad}% · ${fmtUSD(revenueOf(p))} pot.</div></div></div>`).join('');
 }
 
 /* ---------- PIPELINE ---------- */
 const KANBAN_CAP=60;
-function renderPipeline(){
+function renderPipeline(target){
   const cols=STAGES.map(s=>{const arr=filtered().filter(p=>p.etapa===s).sort((a,b)=>((b.potencial==='alto')-(a.potencial==='alto'))||(compScore(b)-compScore(a))),sum=arr.reduce((a,p)=>a+revenueOf(p),0);
     const shown=arr.slice(0,KANBAN_CAP);
     const moreNote=arr.length>KANBAN_CAP?`<div class="muted" style="padding:10px;font-size:11px;text-align:center;border-top:1px solid var(--line)">+${arr.length-KANBAN_CAP} más · velos en <b>Clientes</b></div>`:'';
     return `<div class="kcol" data-stage="${s}"><div class="kcol-head"><span style="color:${STAGE_COLOR[s]}">${s}</span><span class="cnt">${arr.length}</span></div><div class="kcol-sum">${fmtUSD(sum)}</div><div class="kcol-body">${shown.map(card).join('')}${moreNote}</div></div>`;}).join('');
   const legend=`<div class="pipe-legend"><span class="muted">Actividad:</span><span><i class="ld ok"></i> agendada</span><span><i class="ld today"></i> hoy</span><span><i class="ld overdue"></i> vencida</span><span><i class="ld none"></i> sin actividad</span></div>`;
-  $('#view-pipeline').innerHTML=legend+`<div class="kanban">${cols}</div>`; bindKanban();
+  $(target||'#view-pipeline').innerHTML=legend+`<div class="kanban">${cols}</div>`; bindKanban();
 }
 function actStatus(p){ if(!OPEN_STAGES.includes(p.etapa))return 'none'; const d=daysFromToday(p.fechaProxima); if(d==null)return 'none'; if(d<0)return 'overdue'; if(d===0)return 'today'; return 'ok'; }
 function card(p){
@@ -525,11 +540,14 @@ function bindKanban(){
 }
 function moveStage(p,ns){ p.stageHistory=p.stageHistory||[]; p.stageHistory.push({de:p.etapa,a:ns,fecha:todayISO()}); p.etapa=ns; if(WON_STAGES.includes(ns)&&!p.ganadoFecha)p.ganadoFecha=todayISO(); p.actualizado=todayISO(); save(); }
 
-/* ---------- CLIENTES ---------- */
-function renderClientes(){
-  const segs=segNames().map(s=>({s,n:state.prospects.filter(p=>p.segmento===s).length})).filter(x=>x.n);
-  const conDatos=state.prospects.filter(p=>compScore(p)>0).length, sinDatos=state.prospects.length-conDatos;
-  const superN=state.prospects.filter(p=>p.potencial==='alto').length;
+/* ---------- CLIENTES ----------------------------------------------------
+   Misma tabla para la cartera y para Tarjetas: cambia solo el contenedor y
+   la lista de origen (scopeList()), asi Tarjetas hereda filtros y ficha. */
+function renderClientes(target){
+  const base=scopeList();
+  const segs=segNames().map(s=>({s,n:base.filter(p=>p.segmento===s).length})).filter(x=>x.n);
+  const conDatos=base.filter(p=>compScore(p)>0).length, sinDatos=base.length-conDatos;
+  const superN=base.filter(p=>p.potencial==='alto').length;
   const arr=filtered().slice().sort((a,b)=>(ui.filtroDatos==='operaba'?(operabaScore(b)-operabaScore(a)):0)||((b.potencial==='alto')-(a.potencial==='alto'))||(compScore(b)-compScore(a)));
   const rows=arr.map(p=>`<tr data-client="${p.id}" style="cursor:pointer">
     <td><strong>${p.potencial==='alto'?'⭐ ':''}${esc(p.empresa)}</strong><div class="meta">${esc(p.contacto||'—')}${p.puesto?' · '+esc(p.puesto):''}</div></td>
@@ -539,12 +557,12 @@ function renderClientes(){
     <td>${p.telefono?'📞':''}${p.email?'✉️':''}${!p.telefono&&!p.email?'<span class="muted">—</span>':''}</td>
     <td style="text-align:right">${fmtUSD(revenueOf(p))}</td>
     <td><div class="row-actions"><button class="icon-btn" data-client="${p.id}" title="Ficha">👁</button><button class="icon-btn" data-sched="${p.id}" title="Agendar cita">📅</button></div></td></tr>`).join('');
-  $('#view-clientes').innerHTML=`
+  $(target||'#view-clientes').innerHTML=`
     <div class="filters">
       <select id="f-datos"><option value="">Todos (datos)</option><option value="potencial" ${ui.filtroDatos==='potencial'?'selected':''}>⭐ Super potenciales</option><option value="operaba" ${ui.filtroDatos==='operaba'?'selected':''}>🔥 Ya operaban (reactivar)</option><option value="porverif" ${ui.filtroDatos==='porverif'?'selected':''}>📞 Por verificar (cola de llamadas)</option><option value="verificados" ${ui.filtroDatos==='verificados'?'selected':''}>✓ Ya verificados</option><option value="con" ${ui.filtroDatos==='con'?'selected':''}>Con datos de contacto</option><option value="email" ${ui.filtroDatos==='email'?'selected':''}>Con correo</option><option value="tel" ${ui.filtroDatos==='tel'?'selected':''}>Con teléfono</option><option value="sin" ${ui.filtroDatos==='sin'?'selected':''}>Solo nombre</option></select>
       <select id="f-seg"><option value="">Todas las industrias</option>${segNames().map(s=>`<option ${ui.filtroSeg===s?'selected':''}>${s}</option>`).join('')}</select>
       <select id="f-etapa"><option value="">Todas las etapas</option>${STAGES.map(s=>`<option ${ui.filtroEtapa===s?'selected':''}>${s}</option>`).join('')}</select>
-      <span class="muted">${arr.length} de ${state.prospects.length} · ⭐ ${superN} super · ${conDatos} con datos · ${sinDatos} solo nombre</span>
+      <span class="muted">${arr.length} de ${base.length} · ⭐ ${superN} super · ${conDatos} con datos · ${sinDatos} solo nombre</span>
     </div>
     <div class="panel" style="padding:14px 16px"><h3 style="margin-bottom:10px">Segmentación por industria</h3><div class="funnel">${segs.length?segs.map(({s,n})=>{const max=Math.max(...segs.map(x=>x.n));return `<div class="funnel-row"><span>${s}</span><div class="funnel-bar" style="width:${Math.max(5,n/max*100)}%">${n}</div><span class="muted" style="text-align:right">${n}</span></div>`}).join(''):empty('Sin datos')}</div></div>
     <div class="table-wrap"><table><thead><tr><th>Empresa / Contacto</th><th>Datos</th><th>Industria</th><th>Etapa</th><th>Medios</th><th style="text-align:right">Ingreso est.</th><th></th></tr></thead><tbody>${rows||`<tr><td colspan="7">${empty('Sin clientes que coincidan.')}</td></tr>`}</tbody></table></div>`;
@@ -629,6 +647,7 @@ function openClient(id){
       <div class="drawer-row"><span class="muted">Próxima acción</span><span>${esc(p.proximaAccion||'—')} ${p.fechaProxima?`<span class="tag">${p.fechaProxima}</span>`:''}</span></div>
       ${p.operacion?`<div class="drawer-note" style="border-color:#86e0a5;background:#e7f6ec;color:var(--text)"><b>💰 Operación ganada</b><br>${esc(p.operacion.producto||'Operación')} · Vol ${fmtUSD(p.operacion.volumen)} · Nivel ${esc(p.operacion.nivel||'—')} · <b style="color:var(--green)">Ganancia ${fmtUSD(p.operacion.ganancia)}</b> · ${esc(p.operacion.fecha||'')}</div>`:''}
       ${p.notas?`<div class="drawer-note">${esc(p.notas)}</div>`:''}
+      ${p.esTarjeta?`<div class="drawer-note" style="border-color:var(--accent);background:var(--accent-soft);color:var(--text)"><b>📇 Está en Tarjetas</b><br>Aún no cuenta en tu pipeline ni en tus métricas. <button class="btn-sm" id="drawer-pass" style="margin-top:8px">✓ Pasar a Clientes</button></div>`:''}
       <div class="drawer-actions"><button class="primary-btn" id="drawer-act">+ Actividad</button><button class="ghost-btn" id="drawer-sched">📅 Agendar</button><button class="ghost-btn" id="drawer-cot">≣ Cotizar</button><button class="ghost-btn" id="drawer-edit">✎ Editar</button><button class="ghost-btn danger" id="drawer-del">🗑</button></div>
       <h3 class="drawer-h3">Línea de tiempo</h3>
       <div class="timeline">${acts.length?acts.map(a=>`<div class="tl-item"><div class="tl-dot"></div><div><strong>${esc(a.tipo)}</strong> <span class="muted">${a.fecha||''}</span><div>${esc(a.nota||'')}</div></div></div>`).join(''):'<div class="muted" style="padding:8px">Sin actividades aún.</div>'}${hist.map(h=>`<div class="tl-item"><div class="tl-dot alt"></div><div><span class="muted">${h.fecha}</span> movido a <strong>${esc(h.a)}</strong></div></div>`).join('')}</div>
@@ -636,6 +655,7 @@ function openClient(id){
   $('#drawer-client').classList.remove('hidden'); $('#drawer-overlay').classList.remove('hidden');
   $('#drawer-close').onclick=closeDrawer;
   $('#drawer-act').onclick=()=>openActivity(id);
+  { const dp=$('#drawer-pass'); if(dp)dp.onclick=()=>{ pasarTarjetas([id]); closeDrawer(); }; }
   $('#drawer-sched').onclick=()=>openSchedule(id);
   $('#drawer-cot').onclick=()=>{closeDrawer();ui.view='cotizador';ui.cotCliente=id;render();};
   $('#drawer-edit').onclick=()=>{closeDrawer();openProspect(id);};
@@ -742,7 +762,7 @@ function renderPerfilador(){
       <div class="panel">
         <h3>Perfilar prospecto</h3>
         <p class="muted" style="margin-top:-4px;font-size:12px">11 preguntas, 2 minutos. Úsalo en la llamada o después. El score decide el siguiente paso — no tu intuición.</p>
-        <label>Cliente<select id="perf-cliente"><option value="">— Prospecto nuevo —</option>${state.prospects.map(p=>`<option value="${p.id}" ${ui.perfCliente===p.id?'selected':''}>${esc(p.empresa)}</option>`).join('')}</select></label>
+        <label>Cliente<select id="perf-cliente"><option value="">— Prospecto nuevo —</option>${cartera().map(p=>`<option value="${p.id}" ${ui.perfCliente===p.id?'selected':''}>${esc(p.empresa)}</option>`).join('')}</select></label>
         <div id="perf-newfields" class="grid2" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
           <label>Empresa<input id="perf-empresa" placeholder="Ej. Aceros del Norte SA" /></label>
           <label>Contacto<input id="perf-contacto" placeholder="Nombre y puesto" /></label>
@@ -824,7 +844,7 @@ function renderCotizador(){
     <div class="notes-layout">
       <div class="panel">
         <h3>Nueva cotización</h3>
-        <label>Cliente (opcional)<select id="cot-cliente"><option value="">— Sin asignar —</option>${state.prospects.map(p=>`<option value="${p.id}" ${ui.cotCliente===p.id?'selected':''}>${esc(p.empresa)}</option>`).join('')}</select></label>
+        <label>Cliente (opcional)<select id="cot-cliente"><option value="">— Sin asignar —</option>${cartera().map(p=>`<option value="${p.id}" ${ui.cotCliente===p.id?'selected':''}>${esc(p.empresa)}</option>`).join('')}</select></label>
         <label>Tipo de cálculo<select id="cot-tipo">${Object.keys(COT_TIPOS).map(k=>`<option value="${k}" ${tipo===k?'selected':''}>${COT_TIPOS[k].label}</option>`).join('')}</select></label>
         <div class="grid2" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:4px">${fields}</div>
         <button class="primary-btn" id="cot-calc" style="margin-top:14px;width:100%">Calcular cotización</button>
@@ -1134,7 +1154,7 @@ function renderPropuestas(){
       <div class="panel">
         <h3>Generar propuesta</h3>
         <p class="muted" style="margin-top:-4px;font-size:12px">Elige la jugada, pon 2–4 datos y obtienes una propuesta lista: diagnóstico, 2 formas de cubrir, por qué ahora y tu comisión. Los niveles de mercado se rellenan solos desde <b>Notas de mercado</b>.</p>
-        <label>Cliente (opcional)<select id="prop-cliente"><option value="">— Sin asignar —</option>${state.prospects.map(p=>`<option value="${p.id}" ${ui.propCliente===p.id?'selected':''}>${esc(p.empresa)}</option>`).join('')}</select></label>
+        <label>Cliente (opcional)<select id="prop-cliente"><option value="">— Sin asignar —</option>${cartera().map(p=>`<option value="${p.id}" ${ui.propCliente===p.id?'selected':''}>${esc(p.empresa)}</option>`).join('')}</select></label>
         ${sug.length?`<p class="muted" style="font-size:11.5px;margin:2px 0 0">Sugerido para <b>${esc(cli.segmento)}</b>: ${sug.map(k=>JUGADAS[k].label.split(' · ')[0].split(' (')[0]).join(', ')}</p>`:''}
         <label>Jugada (tipo de exposición)<select id="prop-jugada">${Object.keys(JUGADAS).map(k=>`<option value="${k}" ${jid===k?'selected':''}>${JUGADAS[k].icon} ${JUGADAS[k].label}${sug.includes(k)?'  ★':''}</option>`).join('')}</select></label>
         <div class="grid2" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:4px">${fields}</div>
@@ -1271,7 +1291,7 @@ function submitMove(e){
 }
 
 /* ---------- SEGUIMIENTO ---------- */
-function pendingActivities(){ return state.prospects.filter(p=>p.fechaProxima).map(p=>({p,fecha:p.fechaProxima,accion:p.proximaAccion||'Dar seguimiento',dias:daysFromToday(p.fechaProxima),etapa:p.etapa})).sort((a,b)=>a.dias-b.dias); }
+function pendingActivities(){ return cartera().filter(p=>p.fechaProxima).map(p=>({p,fecha:p.fechaProxima,accion:p.proximaAccion||'Dar seguimiento',dias:daysFromToday(p.fechaProxima),etapa:p.etapa})).sort((a,b)=>a.dias-b.dias); }
 function badgeFor(d){ if(d<0)return`<span class="badge overdue">Vencida ${-d}d</span>`; if(d===0)return`<span class="badge today">Hoy</span>`; if(d<=7)return`<span class="badge soon">En ${d}d</span>`; return`<span class="tag">En ${d}d</span>`; }
 function actItem(a){ return `<div class="list-item" data-client="${a.p.id}" style="cursor:pointer"><div><strong>${esc(a.accion)}</strong><div class="meta">${esc(a.p.empresa)} · ${esc(a.p.contacto||'')}</div></div><div style="text-align:right">${badgeFor(a.dias)}<div class="meta">${a.fecha}</div></div></div>`; }
 function renderSeguimiento(){
@@ -1405,7 +1425,7 @@ function renderNoteClients(txt){
   const panel=$('#nt-clientes-panel'); if(!panel)return;
   if(ui.noteAlcance!=='industria'){ panel.classList.add('hidden'); return; }
   const ind=ui.noteIndustria||(state.industries[0]&&state.industries[0].name);
-  const clientes=state.prospects.filter(p=>p.segmento===ind);
+  const clientes=cartera().filter(p=>p.segmento===ind);
   const conWa=clientes.filter(p=>p.telefono).sort((a,b)=>((b.potencial==='alto')-(a.potencial==='alto')));
   const subj=encodeURIComponent(brand()+' — '+(ui.noteModo==='apertura'?'Apertura':'Cierre')+' de mercado');
   panel.classList.remove('hidden');
@@ -1685,65 +1705,49 @@ function renderCardsReview(){
 function saveCardsBatch(){
   const valid=cardsBatch.filter(c=>c.empresa||c.contacto||c.telefono);
   if(!valid.length){ toast('No hay tarjetas para guardar'); return; }
-  state.tarjetas=state.tarjetas||[];
-  valid.forEach(c=>{ state.tarjetas.unshift({
-    id:uid(), empresa:c.empresa||'', contacto:c.contacto||'', puesto:c.puesto||'',
-    telefono:c.telefono||'', email:c.email||'', notas:c.notas||'', escaneada:todayISO()
+  const seg=segNames()[0]||'';
+  valid.forEach(c=>{ state.prospects.unshift({
+    id:uid(), esTarjeta:true, empresa:c.empresa||c.contacto||'(sin nombre)', contacto:c.contacto||'',
+    puesto:c.puesto||'', telefono:c.telefono||'', email:c.email||'', fuente:'Tarjeta', segmento:seg,
+    etapa:'Cliente nuevo', productos:[], notional:0, feeBps:25, probabilidad:10,
+    proximaAccion:'Primer contacto', fechaProxima:'', notas:c.notas||'',
+    creado:todayISO(), actualizado:todayISO(), actividades:[], stageHistory:[]
   }); });
   save(); closeModals(); ui.view='tarjetas'; render();
   toast(valid.length+' tarjeta(s) guardada(s) en Tarjetas ✓');
 }
 
-/* ---------- BANDEJA DE TARJETAS (division aparte de la cartera) ---------- */
+/* ---------- TARJETAS: misma tabla y mismo pipeline que Clientes ----------
+   Reusa renderClientes/renderPipeline apuntando a su contenedor; scopeList()
+   se encarga de que solo vean las marcadas con esTarjeta. */
 function renderTarjetas(){
-  const t=state.tarjetas||[];
+  const t=bandeja();
+  const lista=ui.tjVista!=='pipeline';
   $('#view-tarjetas').innerHTML=`
-    <div class="panel">
-      <h3>📇 Tarjetas escaneadas <span class="muted">${t.length}</span></h3>
-      <p class="muted" style="margin-top:-8px;font-size:12.5px">Aquí llega todo lo que escaneas. <b>No se mezcla con tu cartera.</b> Revisa cada una y pásala a Clientes cuando esté lista para trabajarse.</p>
-      ${t.length?`<div class="note-send" style="margin:0 0 12px"><button class="primary-btn" id="tj-all">✓ Pasar todas a Clientes (${t.length})</button><button class="ghost-btn danger" id="tj-clear">🗑 Vaciar bandeja</button></div>`:''}
-      <div id="tj-list">${t.length?t.map((c,i)=>`
-        <div class="tj-card" data-i="${i}">
-          <div class="tj-main">
-            <input data-tf="empresa"  placeholder="Empresa"  value="${esc(c.empresa)}" />
-            <input data-tf="contacto" placeholder="Contacto" value="${esc(c.contacto)}" />
-            <input data-tf="puesto"   placeholder="Puesto"   value="${esc(c.puesto)}" />
-            <input data-tf="telefono" placeholder="Teléfono" value="${esc(c.telefono)}" />
-            <input data-tf="email"    placeholder="Correo"   value="${esc(c.email)}" />
-          </div>
-          ${c.notas?`<div class="tj-notas">${esc(c.notas)}</div>`:''}
-          <div class="tj-acts">
-            <span class="muted tj-fecha">Escaneada ${esc(c.escaneada||'')}</span>
-            <span>
-              ${(c.telefono||'')?`<a class="btn-sm" href="tel:${esc((c.telefono||'').replace(/[^\\d+]/g,''))}">📞 Llamar</a>`:''}
-              <button class="btn-sm" data-tj-pass="${i}">✓ Pasar a Clientes</button>
-              <button class="btn-sm" data-tj-del="${i}">🗑</button>
-            </span>
-          </div>
-        </div>`).join(''):empty('Aún no hay tarjetas escaneadas. Usa 📸 Escanear tarjeta arriba.')}</div>
-    </div>`;
-  // Edicion en vivo de cada campo
-  $$('#tj-list .tj-card').forEach(row=>{ const i=+row.dataset.i;
-    row.querySelectorAll('input[data-tf]').forEach(inp=>{ inp.oninput=()=>{ state.tarjetas[i][inp.dataset.tf]=inp.value; save(); }; }); });
-  $$('#tj-list [data-tj-del]').forEach(b=>b.onclick=()=>{ state.tarjetas.splice(+b.dataset.tjDel,1); save(); render(); toast('Tarjeta eliminada'); });
-  $$('#tj-list [data-tj-pass]').forEach(b=>b.onclick=()=>pasarTarjetas([+b.dataset.tjPass]));
-  { const a=$('#tj-all'); if(a)a.onclick=()=>{ if(confirm(`¿Pasar las ${t.length} tarjetas a Clientes?`)) pasarTarjetas(t.map((_,i)=>i)); }; }
-  { const c=$('#tj-clear'); if(c)c.onclick=()=>{ if(confirm(`Esto borra las ${t.length} tarjetas de la bandeja. No se puede deshacer.\n\n¿Continuar?`)){ state.tarjetas=[]; save(); render(); toast('Bandeja vaciada'); } }; }
+    <div class="tj-bar">
+      <div class="seg-toggle">
+        <button data-tjv="lista" class="${lista?'on':''}">☷ Lista</button>
+        <button data-tjv="pipeline" class="${lista?'':'on'}">▤ Pipeline</button>
+      </div>
+      <div class="tj-bar-acts">
+        <span class="muted">${t.length} tarjeta(s) · aparte de tu cartera</span>
+        ${t.length?`<button class="primary-btn btn-sm" id="tj-all">✓ Pasar todas a Clientes</button>`:''}
+      </div>
+    </div>
+    <div id="tj-body"></div>`;
+  $$('#view-tarjetas [data-tjv]').forEach(b=>b.onclick=()=>{ ui.tjVista=b.dataset.tjv; render(); });
+  { const a=$('#tj-all'); if(a)a.onclick=()=>{ if(confirm(`¿Pasar las ${t.length} tarjetas a Clientes?\n\nDejarán la sección Tarjetas y entrarán a tu cartera (pipeline, Mi Día y métricas).`)) pasarTarjetas(t.map(p=>p.id)); }; }
+  if(!t.length){ $('#tj-body').innerHTML=`<div class="panel">${empty('Aún no hay tarjetas escaneadas. Usa 📸 Escanear tarjeta, arriba.')}</div>`; return; }
+  if(lista) renderClientes('#view-tarjetas #tj-body'); else renderPipeline('#view-tarjetas #tj-body');
 }
-// Convierte tarjetas de la bandeja en clientes de la cartera.
-function pasarTarjetas(idxs){
-  const seg=segNames()[0]||'';
-  const sel=idxs.slice().sort((a,b)=>b-a).map(i=>state.tarjetas[i]).filter(Boolean);
-  if(!sel.length) return;
-  sel.forEach(c=>{ state.prospects.unshift({
-    id:uid(), empresa:c.empresa||c.contacto||'(sin nombre)', contacto:c.contacto||'', puesto:c.puesto||'',
-    telefono:c.telefono||'', email:c.email||'', fuente:'Tarjeta', segmento:seg, etapa:'Cliente nuevo',
-    productos:[], notional:0, feeBps:25, probabilidad:10, proximaAccion:'Primer contacto', fechaProxima:'',
-    notas:c.notas||'', creado:todayISO(), actualizado:todayISO(), actividades:[], stageHistory:[]
-  }); });
-  idxs.slice().sort((a,b)=>b-a).forEach(i=>state.tarjetas.splice(i,1));
+// Pasa tarjetas a la cartera: solo les quita la marca (conservan ficha,
+// actividades, etapa e historial — no se recrea nada).
+function pasarTarjetas(ids){
+  const set=new Set(ids); let n=0;
+  (state.prospects||[]).forEach(p=>{ if(set.has(p.id)&&p.esTarjeta){ delete p.esTarjeta; p.actualizado=todayISO(); n++; } });
+  if(!n) return;
   save(); render();
-  toast(sel.length+' pasada(s) a Clientes ✓');
+  toast(n+' pasada(s) a Clientes ✓');
 }
 function updateRevenuePreview(){const f=$('#form-prospect');const n=Number(f.elements.notional.value)||0,b=Number(f.elements.feeBps.value)||0;$('#revenue-preview').textContent=n&&b?`Ingreso estimado: ${fmtUSD(Math.round(n*b/10000))} (${b} bps sobre ${fmtUSD(n)})`:'Ingreso estimado: —';}
 function submitProspect(e){
@@ -1758,7 +1762,7 @@ function submitActivity(e){e.preventDefault();const d=Object.fromEntries(new For
 function closeModals(){stopCamera();$$('.modal-overlay').forEach(m=>m.classList.add('hidden'));}
 
 /* ---------- FILTROS / GLOBAL / DATOS ---------- */
-function filtered(){let arr=state.prospects;const q=ui.search.toLowerCase().trim();if(q)arr=arr.filter(p=>(p.empresa+' '+(p.contacto||'')+' '+(p.email||'')).toLowerCase().includes(q));if(ui.filtroSeg)arr=arr.filter(p=>p.segmento===ui.filtroSeg);if(ui.filtroProd)arr=arr.filter(p=>(p.productos||[]).includes(ui.filtroProd));if(ui.filtroEtapa)arr=arr.filter(p=>p.etapa===ui.filtroEtapa);
+function filtered(){let arr=scopeList();const q=ui.search.toLowerCase().trim();if(q)arr=arr.filter(p=>(p.empresa+' '+(p.contacto||'')+' '+(p.email||'')).toLowerCase().includes(q));if(ui.filtroSeg)arr=arr.filter(p=>p.segmento===ui.filtroSeg);if(ui.filtroProd)arr=arr.filter(p=>(p.productos||[]).includes(ui.filtroProd));if(ui.filtroEtapa)arr=arr.filter(p=>p.etapa===ui.filtroEtapa);
   if(ui.filtroDatos==='con')arr=arr.filter(p=>compScore(p)>0);else if(ui.filtroDatos==='sin')arr=arr.filter(p=>compScore(p)===0);else if(ui.filtroDatos==='email')arr=arr.filter(p=>p.email);else if(ui.filtroDatos==='tel')arr=arr.filter(p=>p.telefono);else if(ui.filtroDatos==='potencial')arr=arr.filter(p=>p.potencial==='alto');else if(ui.filtroDatos==='operaba')arr=arr.filter(p=>operabaScore(p)>0).sort((a,b)=>operabaScore(b)-operabaScore(a));
   // Cola de llamadas: los que faltan por verificar, con teléfono primero y los
   // mejores (ya operaron coberturas) arriba.
@@ -1833,7 +1837,7 @@ function defaultProducts(){return [
 // la realidad desde el primer dia, nunca datos inventados.
 function seedData(){
   return {brand:'Insitum Capital',products:defaultProducts(),industries:defaultIndustries(),market:{},notes:[],
-    prospects:[], tarjetas:[],
+    prospects:[],
     meta:{version:3,updated:new Date().toISOString()}};
 }
 
