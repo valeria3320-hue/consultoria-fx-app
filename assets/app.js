@@ -45,6 +45,13 @@ let ui = { view:'midia', search:'', filtroSeg:'', filtroProd:'', filtroEtapa:'',
 
 function migrate(s){
   if(!s.brand) s.brand='Insitum Capital';
+  // BANDEJA DE TARJETAS: division aparte, NO se mezcla con la cartera.
+  if(!s.tarjetas) s.tarjetas=[];
+  // Rescate una sola vez: lo escaneado antes de existir la bandeja vivia en
+  // prospects con fuente 'Tarjeta'. Se mueve aqui (y ya no vuelve a ocurrir,
+  // porque al moverlo desaparece de prospects).
+  { const mov=(s.prospects||[]).filter(p=>p.fuente==='Tarjeta');
+    if(mov.length){ s.tarjetas=mov.concat(s.tarjetas); s.prospects=(s.prospects||[]).filter(p=>p.fuente!=='Tarjeta'); } }
   if(!s.products||!s.products.length) s.products=defaultProducts();
   if(!s.industries||!s.industries.length) s.industries=defaultIndustries();
   if(!s.market) s.market={};
@@ -308,9 +315,11 @@ function render(){
   $$('.view').forEach(v=>v.classList.add('hidden'));
   $('#view-'+ui.view).classList.remove('hidden');
   $$('.nav-btn').forEach(b=>b.classList.toggle('active',b.dataset.view===ui.view));
-  const titles={midia:['Mi Día','Tu plan de acción de hoy'],resumen:['Resumen','Salud de tu cartera'],pipeline:['Pipeline','Arrastra clientes por la cadena'],clientes:['Clientes','CRM: ficha completa'],propuestas:['Propuestas','Genera una propuesta de valor en segundos'],cotizador:['Cotizador','Calcula y envía cotizaciones'],perfilador:['Perfilador','Califica prospectos en 2 minutos: exposición, dolor y decisión'],seguimiento:['Seguimiento','Tu agenda de acciones'],notas:['Notas de mercado','Apertura y cierre por industria'],productos:['Productos','Catálogo editable'],equipo:['Equipo','Cartera consolidada de socios'],playbook:['Playbook','Metodología'],ajustes:['Ajustes','Marca, industrias y datos']};
+  const titles={midia:['Mi Día','Tu plan de acción de hoy'],resumen:['Resumen','Salud de tu cartera'],pipeline:['Pipeline','Arrastra clientes por la cadena'],clientes:['Clientes','CRM: ficha completa'],tarjetas:['Tarjetas','Escaneadas, aparte de tu cartera — revísalas y pásalas a Clientes'],propuestas:['Propuestas','Genera una propuesta de valor en segundos'],cotizador:['Cotizador','Calcula y envía cotizaciones'],perfilador:['Perfilador','Califica prospectos en 2 minutos: exposición, dolor y decisión'],seguimiento:['Seguimiento','Tu agenda de acciones'],notas:['Notas de mercado','Apertura y cierre por industria'],productos:['Productos','Catálogo editable'],equipo:['Equipo','Cartera consolidada de socios'],playbook:['Playbook','Metodología'],ajustes:['Ajustes','Marca, industrias y datos']};
   $('#view-title').textContent=titles[ui.view][0]; $('#view-sub').textContent=titles[ui.view][1];
-  ({midia:renderMiDia,resumen:renderResumen,pipeline:renderPipeline,clientes:renderClientes,propuestas:renderPropuestas,cotizador:renderCotizador,perfilador:renderPerfilador,seguimiento:renderSeguimiento,notas:renderNotas,productos:renderProductos,equipo:renderEquipo,playbook:renderPlaybook,ajustes:renderAjustes}[ui.view])();
+  // Contador de la bandeja en el menu
+  { const b=$('#nav-tarjetas-n'), n=(state.tarjetas||[]).length; if(b){ b.textContent=n; b.classList.toggle('hidden',!n); } }
+  ({midia:renderMiDia,resumen:renderResumen,pipeline:renderPipeline,clientes:renderClientes,tarjetas:renderTarjetas,propuestas:renderPropuestas,cotizador:renderCotizador,perfilador:renderPerfilador,seguimiento:renderSeguimiento,notas:renderNotas,productos:renderProductos,equipo:renderEquipo,playbook:renderPlaybook,ajustes:renderAjustes}[ui.view])();
 }
 
 /* ---------- MI DÍA (buenos días + pasos por temporalidad) ---------- */
@@ -1671,18 +1680,70 @@ function renderCardsReview(){
   });
   list.querySelectorAll('[data-del]').forEach(b=>b.onclick=()=>{ cardsBatch.splice(+b.dataset.del,1); renderCardsReview(); });
 }
+// Las tarjetas escaneadas NO entran a la cartera: van a la bandeja "Tarjetas".
+// De ahi se revisan y se pasan a Clientes una por una (o todas).
 function saveCardsBatch(){
   const valid=cardsBatch.filter(c=>c.empresa||c.contacto||c.telefono);
   if(!valid.length){ toast('No hay tarjetas para guardar'); return; }
+  state.tarjetas=state.tarjetas||[];
+  valid.forEach(c=>{ state.tarjetas.unshift({
+    id:uid(), empresa:c.empresa||'', contacto:c.contacto||'', puesto:c.puesto||'',
+    telefono:c.telefono||'', email:c.email||'', notas:c.notas||'', escaneada:todayISO()
+  }); });
+  save(); closeModals(); ui.view='tarjetas'; render();
+  toast(valid.length+' tarjeta(s) guardada(s) en Tarjetas ✓');
+}
+
+/* ---------- BANDEJA DE TARJETAS (division aparte de la cartera) ---------- */
+function renderTarjetas(){
+  const t=state.tarjetas||[];
+  $('#view-tarjetas').innerHTML=`
+    <div class="panel">
+      <h3>📇 Tarjetas escaneadas <span class="muted">${t.length}</span></h3>
+      <p class="muted" style="margin-top:-8px;font-size:12.5px">Aquí llega todo lo que escaneas. <b>No se mezcla con tu cartera.</b> Revisa cada una y pásala a Clientes cuando esté lista para trabajarse.</p>
+      ${t.length?`<div class="note-send" style="margin:0 0 12px"><button class="primary-btn" id="tj-all">✓ Pasar todas a Clientes (${t.length})</button><button class="ghost-btn danger" id="tj-clear">🗑 Vaciar bandeja</button></div>`:''}
+      <div id="tj-list">${t.length?t.map((c,i)=>`
+        <div class="tj-card" data-i="${i}">
+          <div class="tj-main">
+            <input data-tf="empresa"  placeholder="Empresa"  value="${esc(c.empresa)}" />
+            <input data-tf="contacto" placeholder="Contacto" value="${esc(c.contacto)}" />
+            <input data-tf="puesto"   placeholder="Puesto"   value="${esc(c.puesto)}" />
+            <input data-tf="telefono" placeholder="Teléfono" value="${esc(c.telefono)}" />
+            <input data-tf="email"    placeholder="Correo"   value="${esc(c.email)}" />
+          </div>
+          ${c.notas?`<div class="tj-notas">${esc(c.notas)}</div>`:''}
+          <div class="tj-acts">
+            <span class="muted tj-fecha">Escaneada ${esc(c.escaneada||'')}</span>
+            <span>
+              ${(c.telefono||'')?`<a class="btn-sm" href="tel:${esc((c.telefono||'').replace(/[^\\d+]/g,''))}">📞 Llamar</a>`:''}
+              <button class="btn-sm" data-tj-pass="${i}">✓ Pasar a Clientes</button>
+              <button class="btn-sm" data-tj-del="${i}">🗑</button>
+            </span>
+          </div>
+        </div>`).join(''):empty('Aún no hay tarjetas escaneadas. Usa 📸 Escanear tarjeta arriba.')}</div>
+    </div>`;
+  // Edicion en vivo de cada campo
+  $$('#tj-list .tj-card').forEach(row=>{ const i=+row.dataset.i;
+    row.querySelectorAll('input[data-tf]').forEach(inp=>{ inp.oninput=()=>{ state.tarjetas[i][inp.dataset.tf]=inp.value; save(); }; }); });
+  $$('#tj-list [data-tj-del]').forEach(b=>b.onclick=()=>{ state.tarjetas.splice(+b.dataset.tjDel,1); save(); render(); toast('Tarjeta eliminada'); });
+  $$('#tj-list [data-tj-pass]').forEach(b=>b.onclick=()=>pasarTarjetas([+b.dataset.tjPass]));
+  { const a=$('#tj-all'); if(a)a.onclick=()=>{ if(confirm(`¿Pasar las ${t.length} tarjetas a Clientes?`)) pasarTarjetas(t.map((_,i)=>i)); }; }
+  { const c=$('#tj-clear'); if(c)c.onclick=()=>{ if(confirm(`Esto borra las ${t.length} tarjetas de la bandeja. No se puede deshacer.\n\n¿Continuar?`)){ state.tarjetas=[]; save(); render(); toast('Bandeja vaciada'); } }; }
+}
+// Convierte tarjetas de la bandeja en clientes de la cartera.
+function pasarTarjetas(idxs){
   const seg=segNames()[0]||'';
-  valid.forEach(c=>{ state.prospects.push({
+  const sel=idxs.slice().sort((a,b)=>b-a).map(i=>state.tarjetas[i]).filter(Boolean);
+  if(!sel.length) return;
+  sel.forEach(c=>{ state.prospects.unshift({
     id:uid(), empresa:c.empresa||c.contacto||'(sin nombre)', contacto:c.contacto||'', puesto:c.puesto||'',
     telefono:c.telefono||'', email:c.email||'', fuente:'Tarjeta', segmento:seg, etapa:'Cliente nuevo',
     productos:[], notional:0, feeBps:25, probabilidad:10, proximaAccion:'Primer contacto', fechaProxima:'',
     notas:c.notas||'', creado:todayISO(), actualizado:todayISO(), actividades:[], stageHistory:[]
   }); });
-  save(); closeModals(); render();
-  toast(valid.length+' cliente(s) agregado(s) ✓');
+  idxs.slice().sort((a,b)=>b-a).forEach(i=>state.tarjetas.splice(i,1));
+  save(); render();
+  toast(sel.length+' pasada(s) a Clientes ✓');
 }
 function updateRevenuePreview(){const f=$('#form-prospect');const n=Number(f.elements.notional.value)||0,b=Number(f.elements.feeBps.value)||0;$('#revenue-preview').textContent=n&&b?`Ingreso estimado: ${fmtUSD(Math.round(n*b/10000))} (${b} bps sobre ${fmtUSD(n)})`:'Ingreso estimado: —';}
 function submitProspect(e){
@@ -1772,7 +1833,7 @@ function defaultProducts(){return [
 // la realidad desde el primer dia, nunca datos inventados.
 function seedData(){
   return {brand:'Insitum Capital',products:defaultProducts(),industries:defaultIndustries(),market:{},notes:[],
-    prospects:[],
+    prospects:[], tarjetas:[],
     meta:{version:3,updated:new Date().toISOString()}};
 }
 

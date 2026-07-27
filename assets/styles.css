@@ -405,6 +405,25 @@ label>select{width:100%}
 .eye-btn{position:absolute;right:2px;top:50%;transform:translateY(-50%);background:none;border:0;font-size:17px;cursor:pointer;padding:8px;min-width:40px;min-height:40px;color:var(--muted)}
 .linklike{background:none;border:0;color:var(--accent);cursor:pointer;font-size:13px;padding:8px 0;text-decoration:underline;width:100%;text-align:center}
 
+/* Bandeja de Tarjetas (división aparte de la cartera) */
+.nav-badge{margin-left:auto;background:var(--accent);color:#fff;font-size:10.5px;font-weight:700;
+  border-radius:20px;padding:1px 7px;min-width:18px;text-align:center}
+.tj-card{border:1px solid var(--line2);border-radius:11px;padding:12px;background:var(--bg2);margin-bottom:10px}
+.tj-main{display:grid;grid-template-columns:1.4fr 1.2fr 1fr 1fr 1.2fr;gap:8px}
+.tj-main input{background:var(--panel);border:1px solid var(--line2);color:var(--text);
+  padding:8px 10px;border-radius:8px;font-size:12.5px;font-family:inherit;width:100%;min-width:0}
+.tj-main input:focus{outline:none;border-color:var(--accent)}
+.tj-notas{font-size:11.5px;color:var(--muted);margin-top:8px;line-height:1.4}
+.tj-acts{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap}
+.tj-acts .btn-sm{margin-left:6px;text-decoration:none;display:inline-block}
+.tj-fecha{font-size:11px}
+@media(max-width:900px){
+  .tj-main{grid-template-columns:1fr 1fr}
+  .tj-main input{font-size:16px;min-height:44px}
+  .tj-acts{flex-direction:column;align-items:stretch}
+  .tj-acts .btn-sm{margin:4px 0 0;text-align:center;min-height:40px;line-height:28px}
+}
+
 /* Cámara en vivo (webcam de PC o cámara del celular) */
 .cam-wrap{position:relative;background:#111;border-radius:12px;overflow:hidden;aspect-ratio:4/3;max-height:52vh}
 #cam-video{width:100%;height:100%;object-fit:cover;display:block}
