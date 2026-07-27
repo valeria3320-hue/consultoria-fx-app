@@ -517,7 +517,12 @@ function renderPipeline(target){
     const moreNote=arr.length>KANBAN_CAP?`<div class="muted" style="padding:10px;font-size:11px;text-align:center;border-top:1px solid var(--line)">+${arr.length-KANBAN_CAP} más · velos en <b>Clientes</b></div>`:'';
     return `<div class="kcol" data-stage="${s}"><div class="kcol-head"><span style="color:${STAGE_COLOR[s]}">${s}</span><span class="cnt">${arr.length}</span></div><div class="kcol-sum">${fmtUSD(sum)}</div><div class="kcol-body">${shown.map(card).join('')}${moreNote}</div></div>`;}).join('');
   const legend=`<div class="pipe-legend"><span class="muted">Actividad:</span><span><i class="ld ok"></i> agendada</span><span><i class="ld today"></i> hoy</span><span><i class="ld overdue"></i> vencida</span><span><i class="ld none"></i> sin actividad</span></div>`;
-  $(target||'#view-pipeline').innerHTML=legend+`<div class="kanban">${cols}</div>`; bindKanban();
+  // Se enlaza SOLO dentro del contenedor: Clientes y Tarjetas tienen cada quien su
+  // kanban, y un enlace global le pega otro listener a las tarjetas de la vista
+  // oculta en cada render (un arrastre acabaria abriendo el dialogo varias veces).
+  const cont=$(target||'#view-pipeline');
+  cont.innerHTML=legend+`<div class="kanban">${cols}</div>`;
+  bindKanban(cont);
 }
 function actStatus(p){ if(!OPEN_STAGES.includes(p.etapa))return 'none'; const d=daysFromToday(p.fechaProxima); if(d==null)return 'none'; if(d<0)return 'overdue'; if(d===0)return 'today'; return 'ok'; }
 function card(p){
@@ -534,14 +539,15 @@ function card(p){
     </div>
   </div>`;
 }
-function bindKanban(){
+function bindKanban(root){
+  const R=root||document;
   let dragId=null, dragged=false;
-  $$('.card').forEach(c=>{
+  Array.from(R.querySelectorAll('.card')).forEach(c=>{
     c.addEventListener('dragstart',e=>{dragId=c.dataset.id;dragged=true;e.dataTransfer.effectAllowed='move';try{e.dataTransfer.setData('text/plain',dragId);}catch(_){}c.classList.add('dragging');});
     c.addEventListener('dragend',()=>{c.classList.remove('dragging');$$('.kcol').forEach(k=>k.classList.remove('dragover'));setTimeout(()=>{dragged=false;},60);});
     c.addEventListener('click',()=>{ if(dragged)return; openClient(c.dataset.id); });
   });
-  $$('.kcol').forEach(col=>{
+  Array.from(R.querySelectorAll('.kcol')).forEach(col=>{
     col.addEventListener('dragover',e=>{e.preventDefault();e.dataTransfer.dropEffect='move';col.classList.add('dragover');});
     col.addEventListener('dragleave',e=>{ if(!col.contains(e.relatedTarget)) col.classList.remove('dragover'); });
     col.addEventListener('drop',e=>{e.preventDefault();col.classList.remove('dragover');const p=state.prospects.find(x=>x.id===dragId);if(!p)return;const ns=col.dataset.stage;if(p.etapa!==ns){openMove(dragId,ns);}});
@@ -566,7 +572,11 @@ function renderClientes(target){
     <td>${p.telefono?'📞':''}${p.email?'✉️':''}${!p.telefono&&!p.email?'<span class="muted">—</span>':''}</td>
     <td style="text-align:right">${fmtUSD(revenueOf(p))}</td>
     <td><div class="row-actions"><button class="icon-btn" data-client="${p.id}" title="Ficha">👁</button><button class="icon-btn" data-sched="${p.id}" title="Agendar cita">📅</button></div></td></tr>`).join('');
-  $(target||'#view-clientes').innerHTML=`
+  // OJO: los <select> de filtro tienen el mismo id en Clientes y en Tarjetas. Hay que
+  // enlazarlos DENTRO del contenedor: un $('#f-datos') global agarra el de la otra
+  // vista (sigue en el DOM aunque este oculta) y los filtros dejan de responder.
+  const cont=$(target||'#view-clientes');
+  cont.innerHTML=`
     <div class="filters">
       <select id="f-datos"><option value="">Todos (datos)</option><option value="potencial" ${ui.filtroDatos==='potencial'?'selected':''}>⭐ Super potenciales</option><option value="operaba" ${ui.filtroDatos==='operaba'?'selected':''}>🔥 Ya operaban (reactivar)</option><option value="porverif" ${ui.filtroDatos==='porverif'?'selected':''}>📞 Por verificar (cola de llamadas)</option><option value="verificados" ${ui.filtroDatos==='verificados'?'selected':''}>✓ Ya verificados</option><option value="con" ${ui.filtroDatos==='con'?'selected':''}>Con datos de contacto</option><option value="email" ${ui.filtroDatos==='email'?'selected':''}>Con correo</option><option value="tel" ${ui.filtroDatos==='tel'?'selected':''}>Con teléfono</option><option value="sin" ${ui.filtroDatos==='sin'?'selected':''}>Solo nombre</option></select>
       <select id="f-seg"><option value="">Todas las industrias</option>${segNames().map(s=>`<option ${ui.filtroSeg===s?'selected':''}>${s}</option>`).join('')}</select>
@@ -575,9 +585,9 @@ function renderClientes(target){
     </div>
     <div class="panel" style="padding:14px 16px"><h3 style="margin-bottom:10px">Segmentación por industria</h3><div class="funnel">${segs.length?segs.map(({s,n})=>{const max=Math.max(...segs.map(x=>x.n));return `<div class="funnel-row"><span>${s}</span><div class="funnel-bar" style="width:${Math.max(5,n/max*100)}%">${n}</div><span class="muted" style="text-align:right">${n}</span></div>`}).join(''):empty('Sin datos')}</div></div>
     <div class="table-wrap"><table><thead><tr><th>Empresa / Contacto</th><th>Datos</th><th>Industria</th><th>Etapa</th><th>Medios</th><th style="text-align:right">Ingreso est.</th><th></th></tr></thead><tbody>${rows||`<tr><td colspan="7">${empty('Sin clientes que coincidan.')}</td></tr>`}</tbody></table></div>`;
-  $('#f-datos').onchange=e=>{ui.filtroDatos=e.target.value;render();};
-  $('#f-seg').onchange=e=>{ui.filtroSeg=e.target.value;render();};
-  $('#f-etapa').onchange=e=>{ui.filtroEtapa=e.target.value;render();};
+  cont.querySelector('#f-datos').onchange=e=>{ui.filtroDatos=e.target.value;render();};
+  cont.querySelector('#f-seg').onchange=e=>{ui.filtroSeg=e.target.value;render();};
+  cont.querySelector('#f-etapa').onchange=e=>{ui.filtroEtapa=e.target.value;render();};
   bindRowClicks();
 }
 
@@ -1891,9 +1901,48 @@ function seedData(){
     meta:{version:3,updated:new Date().toISOString()}};
 }
 
+/* ---------- Aviso de version nueva ----------
+   Cuando publicamos una actualizacion, una pestana que YA estaba abierta (o la app
+   instalada en el celular) sigue corriendo el codigo viejo hasta que se recarga.
+   Sintoma tipico: "le doy clic al boton nuevo y no pasa nada".
+   Aqui se compara el sello (ETag) del app.js publicado contra el que se cargo;
+   si cambio, sale una barra abajo para actualizar de un clic. */
+let selloCargado=null;
+async function selloPublicado(){
+  try{
+    const r=await fetch('assets/app.js',{method:'HEAD',cache:'no-store'});
+    return r.headers.get('etag')||r.headers.get('last-modified')||null;
+  }catch(e){ return null; }        // sin internet: no molestar
+}
+async function revisarVersion(){
+  const s=await selloPublicado();
+  if(!s) return;
+  if(!selloCargado){ selloCargado=s; return; }   // primera lectura = referencia
+  if(s!==selloCargado) avisoVersion();
+}
+function avisoVersion(){
+  if($('#aviso-version')) return;
+  const d=document.createElement('div');
+  d.id='aviso-version';
+  d.style.cssText='position:fixed;left:0;right:0;bottom:0;z-index:9999;background:#1b1f3d;color:#fff;'
+    +'padding:12px 16px;display:flex;gap:12px;align-items:center;justify-content:center;flex-wrap:wrap;'
+    +'font-size:14px;box-shadow:0 -6px 20px rgba(0,0,0,.18)';
+  d.innerHTML='<span>Hay una versión nueva de la app.</span>'
+    +'<button id="av-si" style="background:#ea0073;color:#fff;border:0;border-radius:8px;padding:8px 16px;font-weight:600;cursor:pointer">Actualizar</button>'
+    +'<button id="av-no" style="background:transparent;color:#cbd5e1;border:0;padding:8px;cursor:pointer">Ahora no</button>';
+  document.body.appendChild(d);
+  $('#av-si').onclick=()=>location.reload();
+  // "Ahora no": se borra la referencia para no insistir con este mismo cambio;
+  // la siguiente lectura la vuelve a fijar y solo avisa cuando haya OTRA version.
+  $('#av-no').onclick=()=>{ selloCargado=null; d.remove(); };
+}
+
 /* ---------- Arranque ---------- */
 function init(){
   bindGlobal();
+  revisarVersion();
+  setInterval(revisarVersion,10*60*1000);
+  document.addEventListener('visibilitychange',()=>{ if(!document.hidden) revisarVersion(); });
   $('#form-login').onsubmit=async e=>{
     e.preventDefault(); const f=e.target; const d=Object.fromEntries(new FormData(f).entries());
     const email = DB.cloud ? d.email : d.demoUser;
