@@ -217,6 +217,18 @@ function cartera(){ return (state.prospects||[]).filter(p=>!p.esTarjeta); }
 function bandeja(){ return (state.prospects||[]).filter(p=>p.esTarjeta); }
 // Lista sobre la que trabajan tabla/kanban/filtros segun la seccion abierta.
 function scopeList(){ return ui.view==='tarjetas' ? bandeja() : cartera(); }
+/* Opciones del selector de cliente en Cotizador / Perfilador / Propuestas.
+   Incluye la cartera Y las tarjetas escaneadas, en grupos separados: las tarjetas
+   se trabajan desde su propia seccion, asi que hay que poder cotizarlas y
+   perfilarlas sin tener que pasarlas antes a Clientes. El id es el mismo prospect,
+   asi que todo lo de abajo (guardar cotizacion, actividad, propuesta) ya funciona. */
+function opcionesCliente(sel){
+  const opt=p=>`<option value="${p.id}" ${sel===p.id?'selected':''}>${esc(p.empresa)}</option>`;
+  const c=cartera(), t=bandeja().slice().sort((a,b)=>(a.empresa||'').localeCompare(b.empresa||'','es'));
+  if(!t.length) return c.map(opt).join('');
+  return (c.length?`<optgroup label="Clientes">${c.map(opt).join('')}</optgroup>`:'')
+    +`<optgroup label="📇 Tarjetas">${t.map(opt).join('')}</optgroup>`;
+}
 // Nombre para saludo/avatar a partir del correo, sin exponer correos en config.js.
 // "valeria3320@gmail.com" -> "Valeria" · "gori_mx@hotmail.com" -> "Gori"
 function displayName(email){
@@ -781,7 +793,7 @@ function renderPerfilador(){
       <div class="panel">
         <h3>Perfilar prospecto</h3>
         <p class="muted" style="margin-top:-4px;font-size:12px">11 preguntas, 2 minutos. Úsalo en la llamada o después. El score decide el siguiente paso — no tu intuición.</p>
-        <label>Cliente<select id="perf-cliente"><option value="">— Prospecto nuevo —</option>${cartera().map(p=>`<option value="${p.id}" ${ui.perfCliente===p.id?'selected':''}>${esc(p.empresa)}</option>`).join('')}</select></label>
+        <label>Cliente<select id="perf-cliente"><option value="">— Prospecto nuevo —</option>${opcionesCliente(ui.perfCliente)}</select></label>
         <div id="perf-newfields" class="grid2" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
           <label>Empresa<input id="perf-empresa" placeholder="Ej. Aceros del Norte SA" /></label>
           <label>Contacto<input id="perf-contacto" placeholder="Nombre y puesto" /></label>
@@ -863,7 +875,7 @@ function renderCotizador(){
     <div class="notes-layout">
       <div class="panel">
         <h3>Nueva cotización</h3>
-        <label>Cliente (opcional)<select id="cot-cliente"><option value="">— Sin asignar —</option>${cartera().map(p=>`<option value="${p.id}" ${ui.cotCliente===p.id?'selected':''}>${esc(p.empresa)}</option>`).join('')}</select></label>
+        <label>Cliente (opcional)<select id="cot-cliente"><option value="">— Sin asignar —</option>${opcionesCliente(ui.cotCliente)}</select></label>
         <label>Tipo de cálculo<select id="cot-tipo">${Object.keys(COT_TIPOS).map(k=>`<option value="${k}" ${tipo===k?'selected':''}>${COT_TIPOS[k].label}</option>`).join('')}</select></label>
         <div class="grid2" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:4px">${fields}</div>
         <button class="primary-btn" id="cot-calc" style="margin-top:14px;width:100%">Calcular cotización</button>
@@ -1173,7 +1185,7 @@ function renderPropuestas(){
       <div class="panel">
         <h3>Generar propuesta</h3>
         <p class="muted" style="margin-top:-4px;font-size:12px">Elige la jugada, pon 2–4 datos y obtienes una propuesta lista: diagnóstico, 2 formas de cubrir, por qué ahora y tu comisión. Los niveles de mercado se rellenan solos desde <b>Notas de mercado</b>.</p>
-        <label>Cliente (opcional)<select id="prop-cliente"><option value="">— Sin asignar —</option>${cartera().map(p=>`<option value="${p.id}" ${ui.propCliente===p.id?'selected':''}>${esc(p.empresa)}</option>`).join('')}</select></label>
+        <label>Cliente (opcional)<select id="prop-cliente"><option value="">— Sin asignar —</option>${opcionesCliente(ui.propCliente)}</select></label>
         ${sug.length?`<p class="muted" style="font-size:11.5px;margin:2px 0 0">Sugerido para <b>${esc(cli.segmento)}</b>: ${sug.map(k=>JUGADAS[k].label.split(' · ')[0].split(' (')[0]).join(', ')}</p>`:''}
         <label>Jugada (tipo de exposición)<select id="prop-jugada">${Object.keys(JUGADAS).map(k=>`<option value="${k}" ${jid===k?'selected':''}>${JUGADAS[k].icon} ${JUGADAS[k].label}${sug.includes(k)?'  ★':''}</option>`).join('')}</select></label>
         <div class="grid2" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:4px">${fields}</div>
