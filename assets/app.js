@@ -61,6 +61,15 @@ function migrate(s){
   s.tarjetas=[];
   // Lo escaneado antes de existir la seccion quedo con fuente 'Tarjeta'.
   (s.prospects||[]).forEach(p=>{ if(p.fuente==='Tarjeta'&&p.esTarjeta===undefined)p.esTarjeta=true; });
+  // Alta unica de Servicios/Tecnologia en catalogos ya existentes (muchas
+  // tarjetas caian sin clasificar por no tener esta industria). El flag evita
+  // que reaparezca si la usuaria decide borrarla.
+  if(!s._indServicios){
+    s._indServicios=true;
+    s.industries=s.industries||[];
+    if(!s.industries.some(i=>i&&i.name==='Servicios/Tecnología'))
+      s.industries.push({name:'Servicios/Tecnología',vars:['usdmxn','eurusd','banxico'],tip:'Licencias, nube y equipo en USD; honorarios y contratos en divisa.'});
+  }
   if(!s.products||!s.products.length) s.products=defaultProducts();
   if(!s.industries||!s.industries.length) s.industries=defaultIndustries();
   if(!s.market) s.market={};
@@ -1854,6 +1863,7 @@ function defaultIndustries(){return [
   {name:'Minería/Metales',vars:['oro','cobre','aluminio','usdmxn'],tip:'Metales preciosos e industriales; cobertura de producción.'},
   {name:'Retail/Comercio',vars:['usdmxn','eurusd','banxico'],tip:'Importaciones y costo de capital de trabajo.'},
   {name:'Fintech/Remesas',vars:['usdmxn','eurusd'],tip:'Volumen FX recurrente; optimizar spread.'},
+  {name:'Servicios/Tecnología',vars:['usdmxn','eurusd','banxico'],tip:'Licencias, nube y equipo en USD; honorarios y contratos en divisa.'},
   {name:'Family Office/Patrimonio',vars:['banxico','cetes','ust10','sp500','oro'],tip:'Renta fija, money market y refugio.'},
   {name:'Construcción/Inmobiliaria',vars:['usdmxn','cobre','banxico'],tip:'Insumos, tasas y financiamiento.'},
 ];}
