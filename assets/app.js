@@ -1603,7 +1603,8 @@ async function scanOneImage(file){
   const payload=await fileToScaledBase64(file,2576);
   const r=await fetch('/.netlify/functions/scan-card',{
     method:'POST',headers:{'content-type':'application/json'},
-    body:JSON.stringify({image:payload.b64,media_type:payload.mime}),
+    // Se mandan las industrias del CRM para que la IA clasifique con esa lista.
+    body:JSON.stringify({image:payload.b64,media_type:payload.mime,industrias:segNames()}),
   });
   if(r.status===404){ const e=new Error('404'); e.code='404'; throw e; }
   const data=await r.json().catch(()=>({error:'respuesta invalida'}));
@@ -1679,7 +1680,7 @@ function scanShots(){
 // Lista de revision editable para carga masiva.
 let cardsBatch=[];
 function openCardsReview(cards,errs){
-  cardsBatch=cards.map(c=>({empresa:c.empresa||'',contacto:c.contacto||'',puesto:c.puesto||'',telefono:c.telefono||'',email:c.email||'',notas:c.notas||''}));
+  cardsBatch=cards.map(c=>({empresa:c.empresa||'',contacto:c.contacto||'',puesto:c.puesto||'',telefono:c.telefono||'',email:c.email||'',segmento:c.segmento||'',notas:c.notas||''}));
   renderCardsReview();
   $('#cards-sub').textContent='Revisa y corrige lo que haga falta. Quita las que no quieras con 🗑. Luego "Guardar todas".'+(errs?` (${errs} foto(s) no se pudieron leer)`:'');
   $('#modal-cards').classList.remove('hidden');
@@ -1705,10 +1706,11 @@ function renderCardsReview(){
 function saveCardsBatch(){
   const valid=cardsBatch.filter(c=>c.empresa||c.contacto||c.telefono);
   if(!valid.length){ toast('No hay tarjetas para guardar'); return; }
-  const seg=segNames()[0]||'';
+  // La industria la decide la IA al leer la tarjeta. Si no la pudo deducir se
+  // deja VACIA a proposito: mejor sin clasificar que mal clasificada.
   valid.forEach(c=>{ state.prospects.unshift({
     id:uid(), esTarjeta:true, empresa:c.empresa||c.contacto||'(sin nombre)', contacto:c.contacto||'',
-    puesto:c.puesto||'', telefono:c.telefono||'', email:c.email||'', fuente:'Tarjeta', segmento:seg,
+    puesto:c.puesto||'', telefono:c.telefono||'', email:c.email||'', fuente:'Tarjeta', segmento:c.segmento||'',
     etapa:'Cliente nuevo', productos:[], notional:0, feeBps:25, probabilidad:10,
     proximaAccion:'Primer contacto', fechaProxima:'', notas:c.notas||'',
     creado:todayISO(), actualizado:todayISO(), actividades:[], stageHistory:[]
@@ -1731,15 +1733,41 @@ function renderTarjetas(){
       </div>
       <div class="tj-bar-acts">
         <span class="muted">${t.length} tarjeta(s) · aparte de tu cartera</span>
+        ${t.length?`<button class="ghost-btn btn-sm" id="tj-seg">🏷️ Clasificar industrias</button>`:''}
         ${t.length?`<button class="primary-btn btn-sm" id="tj-all">✓ Pasar todas a Clientes</button>`:''}
       </div>
     </div>
     <div id="tj-body"></div>`;
   $$('#view-tarjetas [data-tjv]').forEach(b=>b.onclick=()=>{ ui.tjVista=b.dataset.tjv; render(); });
   { const a=$('#tj-all'); if(a)a.onclick=()=>{ if(confirm(`¿Pasar las ${t.length} tarjetas a Clientes?\n\nDejarán la sección Tarjetas y entrarán a tu cartera (pipeline, Mi Día y métricas).`)) pasarTarjetas(t.map(p=>p.id)); }; }
+  { const s=$('#tj-seg'); if(s)s.onclick=()=>clasificarIndustrias(t); }
   if(!t.length){ $('#tj-body').innerHTML=`<div class="panel">${empty('Aún no hay tarjetas escaneadas. Usa 📸 Escanear tarjeta, arriba.')}</div>`; return; }
   if(lista) renderClientes('#view-tarjetas #tj-body'); else renderPipeline('#view-tarjetas #tj-body');
 }
+// Corrige la industria de tarjetas ya guardadas: manda nombre + notas a la IA
+// y aplica lo que devuelva. No toca ningun otro dato.
+async function clasificarIndustrias(lista){
+  const items=(lista||[]).filter(p=>p&&p.empresa);
+  if(!items.length){ toast('No hay tarjetas que clasificar'); return; }
+  toast('🏷️ Clasificando '+items.length+' empresa(s)…');
+  try{
+    const r=await fetch('/.netlify/functions/scan-card',{
+      method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({clasificar:items.map(p=>({empresa:p.empresa,notas:(p.notas||'').slice(0,160)})),industrias:segNames()}),
+    });
+    if(r.status===404){ toast('Esto solo funciona en el sitio publicado, no en localhost.'); return; }
+    const d=await r.json().catch(()=>({error:'json'}));
+    if(!r.ok||d.error){
+      if(d.error==='no_key'){ toast('Falta la llave de la IA en Netlify.'); return; }
+      toast('No se pudo clasificar: '+(d.detail||d.error)); return;
+    }
+    const segs=d.segmentos||[]; const validas=segNames(); let n=0;
+    items.forEach((p,i)=>{ const s=segs[i]; if(s&&validas.includes(s)&&s!==p.segmento){ p.segmento=s; p.actualizado=todayISO(); n++; } });
+    save(); render();
+    toast(n?(n+' industria(s) corregida(s) ✓'):'Las industrias ya estaban bien');
+  }catch(e){ toast('Sin conexión: '+e.message); }
+}
+
 // Pasa tarjetas a la cartera: solo les quita la marca (conservan ficha,
 // actividades, etapa e historial — no se recrea nada).
 function pasarTarjetas(ids){
