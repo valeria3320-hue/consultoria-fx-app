@@ -1746,26 +1746,38 @@ function renderTarjetas(){
 }
 // Corrige la industria de tarjetas ya guardadas: manda nombre + notas a la IA
 // y aplica lo que devuelva. No toca ningun otro dato.
+const normEmp=s=>(s||'').toString().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9]/g,'');
 async function clasificarIndustrias(lista){
   const items=(lista||[]).filter(p=>p&&p.empresa);
   if(!items.length){ toast('No hay tarjetas que clasificar'); return; }
-  toast('🏷️ Clasificando '+items.length+' empresa(s)…');
+  const validas=segNames();
+  // Empresas UNICAS (varias tarjetas de la misma empresa comparten industria)
+  const unicas=[...new Map(items.map(p=>[normEmp(p.empresa),{empresa:p.empresa,notas:(p.notas||'').slice(0,140)}])).values()];
+  const TANDA=15, mapa=new Map();
   try{
-    const r=await fetch('/.netlify/functions/scan-card',{
-      method:'POST',headers:{'content-type':'application/json'},
-      body:JSON.stringify({clasificar:items.map(p=>({empresa:p.empresa,notas:(p.notas||'').slice(0,160)})),industrias:segNames()}),
-    });
-    if(r.status===404){ toast('Esto solo funciona en el sitio publicado, no en localhost.'); return; }
-    const d=await r.json().catch(()=>({error:'json'}));
-    if(!r.ok||d.error){
-      if(d.error==='no_key'){ toast('Falta la llave de la IA en Netlify.'); return; }
-      toast('No se pudo clasificar: '+(d.detail||d.error)); return;
+    for(let i=0;i<unicas.length;i+=TANDA){
+      const lote=unicas.slice(i,i+TANDA);
+      toast(`🏷️ Clasificando… ${Math.min(i+TANDA,unicas.length)} de ${unicas.length}`);
+      const r=await fetch('/.netlify/functions/scan-card',{
+        method:'POST',headers:{'content-type':'application/json'},
+        body:JSON.stringify({clasificar:lote,industrias:validas}),
+      });
+      if(r.status===404){ toast('Esto solo funciona en el sitio publicado, no en localhost.'); return; }
+      const d=await r.json().catch(()=>({error:'json'}));
+      if(!r.ok||d.error){
+        if(d.error==='no_key'){ toast('Falta la llave de la IA en Netlify.'); return; }
+        toast('No se pudo clasificar: '+(d.detail||d.error)); return;
+      }
+      // Emparejar por NOMBRE, no por posicion: si el modelo omite alguna,
+      // las demas no se descuadran (ese era el bug).
+      (d.items||[]).forEach(it=>{ if(it&&validas.includes(it.segmento)) mapa.set(normEmp(it.empresa),it.segmento); });
     }
-    const segs=d.segmentos||[]; const validas=segNames(); let n=0;
-    items.forEach((p,i)=>{ const s=segs[i]; if(s&&validas.includes(s)&&s!==p.segmento){ p.segmento=s; p.actualizado=todayISO(); n++; } });
-    save(); render();
-    toast(n?(n+' industria(s) corregida(s) ✓'):'Las industrias ya estaban bien');
-  }catch(e){ toast('Sin conexión: '+e.message); }
+  }catch(e){ toast('Sin conexión: '+e.message); return; }
+  let n=0, sin=0;
+  items.forEach(p=>{ const s=mapa.get(normEmp(p.empresa));
+    if(s){ if(s!==p.segmento){ p.segmento=s; p.actualizado=todayISO(); n++; } } else sin++; });
+  save(); render();
+  toast(n?(`${n} industria(s) corregida(s) ✓`+(sin?` · ${sin} sin clasificar`:'')):'No hubo cambios que aplicar');
 }
 
 // Pasa tarjetas a la cartera: solo les quita la marca (conservan ficha,

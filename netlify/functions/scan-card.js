@@ -91,25 +91,40 @@ exports.handler = async (event) => {
   // Sirve para corregir industrias de tarjetas ya guardadas.
   if (Array.isArray(body.clasificar)) {
     if (!industrias.length) return reply(400, { error: 'no_industrias' });
-    const lista = body.clasificar.slice(0, 60);
+    const lista = body.clasificar.slice(0, 25);
     const prompt = [
-      'Para cada empresa de la lista, determina a que industria pertenece.',
+      'Clasifica CADA UNA de las ' + lista.length + ' empresas de la lista.',
       segRule(industrias),
-      'Responde en el MISMO orden y con la MISMA cantidad de elementos que la lista.',
+      'Devuelve EXACTAMENTE ' + lista.length + ' elementos, uno por empresa, repitiendo el nombre',
+      'de la empresa tal cual aparece en la lista. No omitas ninguna, no agrupes, no agregues.',
       '',
       'Lista:',
       lista.map((e, i) => `${i + 1}. ${e.empresa}${e.notas ? ' — ' + e.notas : ''}`).join('\n'),
     ].join('\n');
+    // Se devuelve el nombre junto al segmento para poder emparejar por NOMBRE
+    // y no por posicion (si el modelo omite una, las demas no se descuadran).
     const esquema = {
       type: 'object',
-      properties: { segmentos: { type: 'array', items: { type: 'string', enum: industrias.concat(['']) } } },
-      required: ['segmentos'], additionalProperties: false,
+      properties: {
+        items: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              empresa:  { type: 'string' },
+              segmento: { type: 'string', enum: industrias.concat(['']) },
+            },
+            required: ['empresa', 'segmento'], additionalProperties: false,
+          },
+        },
+      },
+      required: ['items'], additionalProperties: false,
     };
     try {
       const rc = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
-        body: JSON.stringify({ model: MODEL, max_tokens: 1500,
+        body: JSON.stringify({ model: MODEL, max_tokens: 4000,
           messages: [{ role: 'user', content: prompt }],
           output_config: { format: { type: 'json_schema', schema: esquema } } }),
       });
@@ -118,7 +133,8 @@ exports.handler = async (event) => {
       let tc = (dc.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
       tc = tc.replace(/^```(?:json)?\s*/i, '').replace(/```$/, '').trim();
       const pc = JSON.parse(tc);
-      return reply(200, { segmentos: pc.segmentos || [] });
+      const items = (pc.items || []).filter(i => i && i.empresa);
+      return reply(200, { items, pedidas: lista.length, devueltas: items.length });
     } catch (e) {
       return reply(502, { error: 'clasificar', detail: String((e && e.message) || e) });
     }
