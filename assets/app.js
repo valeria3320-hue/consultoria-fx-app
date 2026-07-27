@@ -1569,7 +1569,9 @@ function fileToScaledBase64(file,maxPx){
 }
 // Escanea UNA imagen; devuelve arreglo de tarjetas (0, 1 o varias) o lanza {code}.
 async function scanOneImage(file){
-  const payload=await fileToScaledBase64(file,1600);
+  // 2576px = maximo de alta resolucion que aprovechan los modelos actuales.
+  // Clave cuando hay VARIAS tarjetas en una foto: cada una conserva letra legible.
+  const payload=await fileToScaledBase64(file,2576);
   const r=await fetch('/.netlify/functions/scan-card',{
     method:'POST',headers:{'content-type':'application/json'},
     body:JSON.stringify({image:payload.b64,media_type:payload.mime}),
@@ -1596,6 +1598,55 @@ async function scanCards(files){
   if(all.length===1){ openProspect(null,all[0]); toast('Tarjeta leida ✓ Revisa y guarda'+(errs?` · ${errs} con error`:'')); return; }
   openCardsReview(all,errs);
 }
+/* ---------- CAMARA EN VIVO (webcam de PC o camara del celular) --------------
+   Requiere HTTPS (Netlify) o localhost. Permite tomar varias fotos seguidas
+   sin salir de la app y luego escanearlas todas de un jalon. ---------------- */
+let camStream=null, camShots=[];
+async function openCamera(){
+  camShots=[]; renderShots();
+  $('#cam-error').classList.add('hidden');
+  $('#modal-cam').classList.remove('hidden');
+  try{
+    // 'environment' pide la camara trasera en celular; en PC toma la webcam.
+    camStream=await navigator.mediaDevices.getUserMedia({
+      video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}},audio:false});
+    const v=$('#cam-video'); v.srcObject=camStream; try{ await v.play(); }catch(_){}
+    $('#cam-live').classList.remove('hidden'); $('#cam-shoot').disabled=false;
+  }catch(e){
+    $('#cam-live').classList.add('hidden'); $('#cam-shoot').disabled=true;
+    const m = e.name==='NotAllowedError' ? 'No diste permiso para usar la cámara. Dale permiso en el candado 🔒 de la barra de direcciones, o usa "📁 Subir fotos".'
+            : e.name==='NotFoundError'   ? 'No se detectó ninguna cámara en este equipo. Usa "📁 Subir fotos".'
+            : (location.protocol!=='https:'&&location.hostname!=='localhost') ? 'La cámara solo funciona en el sitio publicado (https). Usa "📁 Subir fotos".'
+            : 'No se pudo abrir la cámara: '+(e.message||e.name);
+    $('#cam-error').textContent=m; $('#cam-error').classList.remove('hidden');
+  }
+}
+function stopCamera(){
+  if(camStream){ camStream.getTracks().forEach(t=>t.stop()); camStream=null; }
+  const v=$('#cam-video'); if(v)v.srcObject=null;
+}
+function shootCard(){
+  const v=$('#cam-video');
+  if(!v||!v.videoWidth){ toast('La cámara aún no está lista, espera un segundo'); return; }
+  const c=document.createElement('canvas'); c.width=v.videoWidth; c.height=v.videoHeight;
+  c.getContext('2d').drawImage(v,0,0,c.width,c.height);
+  c.toBlob(b=>{ if(!b){ toast('No se pudo capturar'); return; } camShots.push(b); renderShots(); toast('Foto '+camShots.length+' tomada ✓'); },'image/jpeg',0.9);
+}
+function renderShots(){
+  const w=$('#cam-shots'); if(!w) return;
+  w.querySelectorAll('img').forEach(im=>{ try{ URL.revokeObjectURL(im.src); }catch(_){} });
+  w.innerHTML=camShots.map((b,i)=>`<div class="shot"><img src="${URL.createObjectURL(b)}" alt="foto ${i+1}"><button class="shot-del" data-shot="${i}" title="Quitar">✕</button></div>`).join('');
+  w.querySelectorAll('[data-shot]').forEach(b=>b.onclick=()=>{ camShots.splice(+b.dataset.shot,1); renderShots(); });
+  const cc=$('#cam-count'); if(cc)cc.textContent=camShots.length?(camShots.length+' foto(s) lista(s)'):'Sin fotos aún';
+  const cs=$('#cam-scan'); if(cs)cs.disabled=!camShots.length;
+}
+function scanShots(){
+  if(!camShots.length){ toast('Toma al menos una foto'); return; }
+  const shots=camShots.slice();
+  stopCamera(); $('#modal-cam').classList.add('hidden');
+  scanCards(shots);
+}
+
 // Lista de revision editable para carga masiva.
 let cardsBatch=[];
 function openCardsReview(cards,errs){
@@ -1643,7 +1694,7 @@ function submitProspect(e){
 }
 function openActivity(id){const f=$('#form-activity');f.reset();f.elements.prospectId.value=id;f.elements.fecha.value=todayISO();$('#modal-activity').classList.remove('hidden');}
 function submitActivity(e){e.preventDefault();const d=Object.fromEntries(new FormData(e.target).entries());const p=state.prospects.find(x=>x.id===d.prospectId);if(!p)return;p.actividades=p.actividades||[];p.actividades.push({id:uid(),fecha:d.fecha,tipo:d.tipo,nota:d.nota});if(d.proximaAccion)p.proximaAccion=d.proximaAccion;if(d.fechaProxima)p.fechaProxima=d.fechaProxima;p.actualizado=todayISO();save();closeModals();if(!$('#drawer-client').classList.contains('hidden'))openClient(p.id);render();toast('Actividad registrada ✓');}
-function closeModals(){$$('.modal-overlay').forEach(m=>m.classList.add('hidden'));}
+function closeModals(){stopCamera();$$('.modal-overlay').forEach(m=>m.classList.add('hidden'));}
 
 /* ---------- FILTROS / GLOBAL / DATOS ---------- */
 function filtered(){let arr=state.prospects;const q=ui.search.toLowerCase().trim();if(q)arr=arr.filter(p=>(p.empresa+' '+(p.contacto||'')+' '+(p.email||'')).toLowerCase().includes(q));if(ui.filtroSeg)arr=arr.filter(p=>p.segmento===ui.filtroSeg);if(ui.filtroProd)arr=arr.filter(p=>(p.productos||[]).includes(ui.filtroProd));if(ui.filtroEtapa)arr=arr.filter(p=>p.etapa===ui.filtroEtapa);
@@ -1660,7 +1711,14 @@ function bindRowClicks(){$$('[data-client]').forEach(el=>el.onclick=e=>{if(e.tar
 function bindGlobal(){
   $$('.nav-btn').forEach(b=>b.onclick=()=>{ui.view=b.dataset.view;render();});
   $('#btn-new-prospect').onclick=()=>openProspect(null);
-  { const sc=$('#btn-scan-card'), cf=$('#card-file'); if(sc&&cf){ sc.onclick=()=>cf.click(); cf.onchange=e=>{ const files=Array.from(e.target.files); e.target.value=''; scanCards(files); }; } }
+  // Escaner: el boton abre la CAMARA en vivo; dentro hay opcion de subir fotos.
+  { const sc=$('#btn-scan-card'), cf=$('#card-file'); if(sc&&cf){
+      sc.onclick=openCamera;
+      cf.onchange=e=>{ const files=Array.from(e.target.files); e.target.value=''; stopCamera(); closeModals(); scanCards(files); };
+  } }
+  { const b=$('#cam-shoot');  if(b)b.onclick=shootCard; }
+  { const b=$('#cam-scan');   if(b)b.onclick=scanShots; }
+  { const b=$('#cam-upload'); if(b)b.onclick=()=>$('#card-file').click(); }
   { const cs=$('#cards-save'); if(cs)cs.onclick=saveCardsBatch; }
   $('#global-search').oninput=e=>{ui.search=e.target.value;if(['clientes','pipeline'].includes(ui.view))render();};
   $('#form-prospect').onsubmit=submitProspect; $('#form-prospect').addEventListener('input',updateRevenuePreview);

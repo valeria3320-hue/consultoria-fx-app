@@ -120,6 +120,29 @@
   </div>
 </div>
 
+<!-- Modal camara en vivo (PC con webcam o celular) -->
+<div class="modal-overlay hidden" id="modal-cam">
+  <div class="modal">
+    <div class="modal-head"><h2>📷 Tomar foto de tarjetas</h2><button class="icon-btn" data-close-modal>✕</button></div>
+    <div class="modal-body">
+      <div id="cam-live">
+        <div class="cam-wrap"><video id="cam-video" autoplay playsinline muted></video><div class="cam-guide"></div></div>
+        <p class="muted cam-hint">Coloca la tarjeta dentro del recuadro, con buena luz. Puedes poner <b>varias tarjetas juntas</b> en una misma toma.</p>
+      </div>
+      <p id="cam-error" class="login-error hidden"></p>
+      <div id="cam-shots" class="cam-shots"></div>
+      <div class="modal-foot full">
+        <span class="muted" id="cam-count">Sin fotos aún</span>
+        <div>
+          <button type="button" class="ghost-btn" id="cam-upload">📁 Subir fotos</button>
+          <button type="button" class="ghost-btn" id="cam-shoot">📷 Capturar</button>
+          <button type="button" class="primary-btn" id="cam-scan" disabled>Escanear</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- Modal revision de tarjetas escaneadas (carga masiva) -->
 <div class="modal-overlay hidden" id="modal-cards">
   <div class="modal">

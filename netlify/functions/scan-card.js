@@ -2,19 +2,24 @@
 // La llave de la IA vive SOLO aqui (variable de entorno ANTHROPIC_API_KEY en Netlify),
 // nunca en el navegador. La imagen se procesa y se descarta; no se almacena.
 //
-// Modelo: claude-sonnet-5 (buen balance costo/precision para OCR de tarjetas).
-// Para maxima precision, cambiar la linea "model:" por "claude-opus-4-8".
+// Modelo: claude-opus-4-8 (mejor OCR, sobre todo con varias tarjetas por foto,
+// letra chica, angulos y reflejos). ~4 centavos de dolar por foto.
+// Para abaratar a ~2 centavos con algo menos de precision: 'claude-sonnet-5'.
 
-const MODEL = 'claude-sonnet-5';
+const MODEL = 'claude-opus-4-8';
 
 const PROMPT = [
-  'Esta imagen contiene UNA O VARIAS tarjetas de presentacion.',
+  'Esta imagen contiene UNA O VARIAS tarjetas de presentacion, posiblemente sobre una mesa.',
+  'Examina la imagen COMPLETA con cuidado, de arriba a abajo y de izquierda a derecha.',
+  'Las tarjetas pueden estar giradas, en angulo, ligeramente encimadas, con reflejos o sombras,',
+  'y la letra puede ser pequena. Lee cada una aunque este inclinada o mal iluminada.',
   'Detecta TODAS las tarjetas visibles y extrae los datos de cada una por separado.',
   'Por cada tarjeta devuelve: empresa (razon social o nombre comercial), contacto (nombre completo de la persona),',
   'puesto (cargo), telefono (el principal con lada; si hay varios prefiere el movil),',
-  'email, y notas (datos extra utiles: sitio web, direccion, segundo telefono, etc.).',
+  'email, y notas (datos extra utiles: sitio web, direccion, segundo telefono, anotaciones a mano, etc.).',
   'Si un dato no aparece, dejalo como cadena vacia "". No inventes informacion.',
-  'Si no hay ninguna tarjeta legible, devuelve una lista vacia.',
+  'Es mejor devolver una tarjeta con datos parciales que omitirla.',
+  'Solo devuelve una lista vacia si de plano no hay ninguna tarjeta en la imagen.',
 ].join(' ');
 
 const CARD = {
