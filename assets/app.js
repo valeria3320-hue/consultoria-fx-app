@@ -1567,26 +1567,71 @@ function fileToScaledBase64(file,maxPx){
     img.src=url;
   });
 }
-async function scanCard(file){
-  if(!file) return;
-  toast('📸 Leyendo la tarjeta…');
-  let payload;
-  try{ payload=await fileToScaledBase64(file,1600); }
-  catch(e){ toast('No se pudo abrir la imagen'); return; }
-  try{
-    const r=await fetch('/.netlify/functions/scan-card',{
-      method:'POST',headers:{'content-type':'application/json'},
-      body:JSON.stringify({image:payload.b64,media_type:payload.mime}),
-    });
-    if(r.status===404){ toast('El escaner aun no esta publicado o no corre en localhost. Abre el sitio de Netlify.'); return; }
-    const data=await r.json().catch(()=>({error:'respuesta invalida'}));
-    if(!r.ok||data.error){
-      if(data.error==='no_key'){ toast('Falta configurar la llave de la IA en Netlify (te paso los pasos).'); return; }
-      toast('No se pudo leer la tarjeta: '+(data.detail||data.error||('error '+r.status))); return;
+// Escanea UNA imagen; devuelve arreglo de tarjetas (0, 1 o varias) o lanza {code}.
+async function scanOneImage(file){
+  const payload=await fileToScaledBase64(file,1600);
+  const r=await fetch('/.netlify/functions/scan-card',{
+    method:'POST',headers:{'content-type':'application/json'},
+    body:JSON.stringify({image:payload.b64,media_type:payload.mime}),
+  });
+  if(r.status===404){ const e=new Error('404'); e.code='404'; throw e; }
+  const data=await r.json().catch(()=>({error:'respuesta invalida'}));
+  if(!r.ok||data.error){ const e=new Error(data.detail||data.error||('error '+r.status)); e.code=data.error; throw e; }
+  return data.cards||[];
+}
+// Escanea 1 o varias fotos (cada una con 1 o varias tarjetas). Junta todo y enruta.
+async function scanCards(files){
+  files=Array.from(files||[]); if(!files.length) return;
+  const all=[]; let errs=0;
+  for(let i=0;i<files.length;i++){
+    toast(files.length>1?`📸 Leyendo… foto ${i+1} de ${files.length}`:'📸 Leyendo la tarjeta…');
+    try{ (await scanOneImage(files[i])).forEach(c=>all.push(c)); }
+    catch(e){
+      if(e.code==='404'){ toast('El escaner aun no esta publicado (o corres en localhost). Abre el sitio de Netlify.'); return; }
+      if(e.code==='no_key'){ toast('Falta configurar la llave de la IA en Netlify (te paso los pasos).'); return; }
+      errs++;
     }
-    openProspect(null,data);
-    toast('Tarjeta leida ✓ Revisa los datos y guarda');
-  }catch(e){ toast('Sin conexion con el escaner: '+e.message); }
+  }
+  if(!all.length){ toast(errs?('No se pudo leer ('+errs+' foto(s) con error)'):'No se detectaron tarjetas en las fotos'); return; }
+  if(all.length===1){ openProspect(null,all[0]); toast('Tarjeta leida ✓ Revisa y guarda'+(errs?` · ${errs} con error`:'')); return; }
+  openCardsReview(all,errs);
+}
+// Lista de revision editable para carga masiva.
+let cardsBatch=[];
+function openCardsReview(cards,errs){
+  cardsBatch=cards.map(c=>({empresa:c.empresa||'',contacto:c.contacto||'',puesto:c.puesto||'',telefono:c.telefono||'',email:c.email||'',notas:c.notas||''}));
+  renderCardsReview();
+  $('#cards-sub').textContent='Revisa y corrige lo que haga falta. Quita las que no quieras con 🗑. Luego "Guardar todas".'+(errs?` (${errs} foto(s) no se pudieron leer)`:'');
+  $('#modal-cards').classList.remove('hidden');
+}
+function renderCardsReview(){
+  const list=$('#cards-list');
+  list.innerHTML=cardsBatch.length?cardsBatch.map((c,i)=>`
+    <div class="card-row" data-i="${i}">
+      <div class="card-row-head"><span class="card-row-n">${i+1}</span><button class="card-row-del" data-del="${i}" title="Quitar">🗑</button></div>
+      <input data-f="empresa" placeholder="Empresa" value="${esc(c.empresa)}" />
+      <input data-f="contacto" placeholder="Contacto" value="${esc(c.contacto)}" />
+      <input data-f="telefono" placeholder="Teléfono" value="${esc(c.telefono)}" />
+    </div>`).join(''):'<div class="empty">No quedan tarjetas.</div>';
+  $('#cards-count').textContent=cardsBatch.length+' tarjeta(s)';
+  list.querySelectorAll('.card-row').forEach(row=>{
+    const i=+row.dataset.i;
+    row.querySelectorAll('input[data-f]').forEach(inp=>{ inp.oninput=()=>{ cardsBatch[i][inp.dataset.f]=inp.value; }; });
+  });
+  list.querySelectorAll('[data-del]').forEach(b=>b.onclick=()=>{ cardsBatch.splice(+b.dataset.del,1); renderCardsReview(); });
+}
+function saveCardsBatch(){
+  const valid=cardsBatch.filter(c=>c.empresa||c.contacto||c.telefono);
+  if(!valid.length){ toast('No hay tarjetas para guardar'); return; }
+  const seg=segNames()[0]||'';
+  valid.forEach(c=>{ state.prospects.push({
+    id:uid(), empresa:c.empresa||c.contacto||'(sin nombre)', contacto:c.contacto||'', puesto:c.puesto||'',
+    telefono:c.telefono||'', email:c.email||'', fuente:'Tarjeta', segmento:seg, etapa:'Cliente nuevo',
+    productos:[], notional:0, feeBps:25, probabilidad:10, proximaAccion:'Primer contacto', fechaProxima:'',
+    notas:c.notas||'', creado:todayISO(), actualizado:todayISO(), actividades:[], stageHistory:[]
+  }); });
+  save(); closeModals(); render();
+  toast(valid.length+' cliente(s) agregado(s) ✓');
 }
 function updateRevenuePreview(){const f=$('#form-prospect');const n=Number(f.elements.notional.value)||0,b=Number(f.elements.feeBps.value)||0;$('#revenue-preview').textContent=n&&b?`Ingreso estimado: ${fmtUSD(Math.round(n*b/10000))} (${b} bps sobre ${fmtUSD(n)})`:'Ingreso estimado: —';}
 function submitProspect(e){
@@ -1615,7 +1660,8 @@ function bindRowClicks(){$$('[data-client]').forEach(el=>el.onclick=e=>{if(e.tar
 function bindGlobal(){
   $$('.nav-btn').forEach(b=>b.onclick=()=>{ui.view=b.dataset.view;render();});
   $('#btn-new-prospect').onclick=()=>openProspect(null);
-  { const sc=$('#btn-scan-card'), cf=$('#card-file'); if(sc&&cf){ sc.onclick=()=>cf.click(); cf.onchange=e=>{ const f=e.target.files[0]; e.target.value=''; scanCard(f); }; } }
+  { const sc=$('#btn-scan-card'), cf=$('#card-file'); if(sc&&cf){ sc.onclick=()=>cf.click(); cf.onchange=e=>{ const files=Array.from(e.target.files); e.target.value=''; scanCards(files); }; } }
+  { const cs=$('#cards-save'); if(cs)cs.onclick=saveCardsBatch; }
   $('#global-search').oninput=e=>{ui.search=e.target.value;if(['clientes','pipeline'].includes(ui.view))render();};
   $('#form-prospect').onsubmit=submitProspect; $('#form-prospect').addEventListener('input',updateRevenuePreview);
   $('#form-activity').onsubmit=submitActivity; $('#form-product').onsubmit=submitProduct; $('#form-industry').onsubmit=submitIndustry;

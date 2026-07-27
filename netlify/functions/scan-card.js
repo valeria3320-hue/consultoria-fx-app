@@ -8,14 +8,16 @@
 const MODEL = 'claude-sonnet-5';
 
 const PROMPT = [
-  'Lee esta tarjeta de presentacion y extrae los datos de contacto.',
-  'Devuelve: empresa (razon social o nombre comercial), contacto (nombre completo de la persona),',
+  'Esta imagen contiene UNA O VARIAS tarjetas de presentacion.',
+  'Detecta TODAS las tarjetas visibles y extrae los datos de cada una por separado.',
+  'Por cada tarjeta devuelve: empresa (razon social o nombre comercial), contacto (nombre completo de la persona),',
   'puesto (cargo), telefono (el principal con lada; si hay varios prefiere el movil),',
   'email, y notas (datos extra utiles: sitio web, direccion, segundo telefono, etc.).',
-  'Si un dato no aparece en la tarjeta, dejalo como cadena vacia "". No inventes informacion.',
+  'Si un dato no aparece, dejalo como cadena vacia "". No inventes informacion.',
+  'Si no hay ninguna tarjeta legible, devuelve una lista vacia.',
 ].join(' ');
 
-const SCHEMA = {
+const CARD = {
   type: 'object',
   properties: {
     empresa:  { type: 'string' },
@@ -26,6 +28,12 @@ const SCHEMA = {
     notas:    { type: 'string' },
   },
   required: ['empresa', 'contacto', 'puesto', 'telefono', 'email', 'notas'],
+  additionalProperties: false,
+};
+const SCHEMA = {
+  type: 'object',
+  properties: { cards: { type: 'array', items: CARD } },
+  required: ['cards'],
   additionalProperties: false,
 };
 
@@ -85,18 +93,20 @@ exports.handler = async (event) => {
 
     let txt = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
     txt = txt.replace(/^```(?:json)?\s*/i, '').replace(/```$/,'').trim();
-    let fields;
-    try { fields = JSON.parse(txt); }
+    let parsed;
+    try { parsed = JSON.parse(txt); }
     catch (e) { return reply(502, { error: 'parse' }); }
 
-    return reply(200, {
-      empresa:  fields.empresa  || '',
-      contacto: fields.contacto || '',
-      puesto:   fields.puesto   || '',
-      telefono: fields.telefono || '',
-      email:    fields.email    || '',
-      notas:    fields.notas    || '',
-    });
+    const cards = (parsed.cards || []).map(c => ({
+      empresa:  c.empresa  || '',
+      contacto: c.contacto || '',
+      puesto:   c.puesto   || '',
+      telefono: c.telefono || '',
+      email:    c.email    || '',
+      notas:    c.notas    || '',
+    })).filter(c => c.empresa || c.contacto || c.telefono || c.email);
+
+    return reply(200, { cards });
   } catch (e) {
     return reply(502, { error: 'fetch', detail: String((e && e.message) || e) });
   }

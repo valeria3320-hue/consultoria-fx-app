@@ -69,7 +69,7 @@
         <input type="search" id="global-search" placeholder="Buscar empresa, contacto…" />
         <button class="ghost-btn" id="btn-scan-card">📸 Escanear tarjeta</button>
         <button class="primary-btn" id="btn-new-prospect">+ Nuevo cliente</button>
-        <input type="file" id="card-file" accept="image/*" class="hidden" />
+        <input type="file" id="card-file" accept="image/*" multiple class="hidden" />
       </div>
     </header>
     <section class="content">
@@ -117,6 +117,18 @@
       <label class="full">Notas<textarea name="notas" rows="3" placeholder="Contexto, dolor del cliente, exposición, banca actual…"></textarea></label>
       <div class="modal-foot full"><span class="revenue-preview" id="revenue-preview"></span><div><button type="button" class="ghost-btn" data-close-modal>Cancelar</button><button type="submit" class="primary-btn">Guardar</button></div></div>
     </form>
+  </div>
+</div>
+
+<!-- Modal revision de tarjetas escaneadas (carga masiva) -->
+<div class="modal-overlay hidden" id="modal-cards">
+  <div class="modal">
+    <div class="modal-head"><h2 id="modal-cards-title">Tarjetas escaneadas</h2><button class="icon-btn" data-close-modal>✕</button></div>
+    <div class="modal-body">
+      <p class="muted" id="cards-sub" style="margin-top:-4px">Revisa y corrige lo que haga falta. Quita las que no quieras. Luego guarda todas.</p>
+      <div id="cards-list"></div>
+      <div class="modal-foot full"><span class="muted" id="cards-count"></span><div><button type="button" class="ghost-btn" data-close-modal>Cancelar</button><button type="button" class="primary-btn" id="cards-save">Guardar todas</button></div></div>
+    </div>
   </div>
 </div>
 
