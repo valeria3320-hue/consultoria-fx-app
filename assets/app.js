@@ -1609,7 +1609,7 @@ function renderAjustes(){
       <div class="list">${state.industries.map(i=>`<div class="list-item"><div><strong>${esc(i.name)}</strong><div class="meta">${(i.vars||[]).map(v=>MLAB[v]?MLAB[v].label:v).join(' · ')||'—'}</div></div><div class="row-actions"><button class="icon-btn" data-ind-edit="${esc(i.name)}">✎</button><button class="icon-btn" data-ind-del="${esc(i.name)}">🗑</button></div></div>`).join('')}</div></div>
     <div class="panel"><h3>Datos y sesión</h3><div style="display:flex;gap:10px;flex-wrap:wrap">
       <button class="ghost-btn" id="set-export">⤓ Respaldar (JSON)</button><button class="ghost-btn" id="set-import">⤒ Restaurar</button>
-      <button class="ghost-btn" id="set-csv">⇩ Exportar clientes CSV</button><button class="ghost-btn danger" id="set-reset">⟲ Vaciar y empezar de cero</button>
+      <button class="ghost-btn" id="set-csv">⇩ Exportar clientes CSV</button><button class="ghost-btn" id="set-tel">📞 Teléfonos a 10 dígitos</button><button class="ghost-btn danger" id="set-reset">⟲ Vaciar y empezar de cero</button>
       <button class="ghost-btn" id="set-logout">⎋ Cerrar sesión</button>
     </div><p class="muted" style="margin-top:10px">Sesión: <strong>${esc(ME.email)}</strong> · Modo <strong>${DB.mode()}</strong>. ${DB.cloud?'Tus datos se sincronizan en la nube.':'Modo demo: respalda seguido.'}</p></div>`;
   $('#set-brand-save').onclick=()=>{state.brand=$('#set-brand').value.trim()||'Insitum Capital';state.reportarA=$('#set-reportar').value.trim();save();render();toast('Guardado ✓');};
@@ -1617,6 +1617,7 @@ function renderAjustes(){
   $$('[data-ind-edit]').forEach(b=>b.onclick=()=>openIndustry(b.dataset.indEdit));
   $$('[data-ind-del]').forEach(b=>b.onclick=()=>{if(confirm('¿Eliminar "'+b.dataset.indDel+'"?')){state.industries=state.industries.filter(i=>i.name!==b.dataset.indDel);save();render();}});
   $('#set-export').onclick=exportJSON; $('#set-import').onclick=()=>$('#file-import').click(); $('#set-csv').onclick=exportCSV;
+  $('#set-tel').onclick=normalizarTelefonos;
   $('#set-logout').onclick=doLogout;
   { const cb=$('#set-cargar-base'); if(cb) cb.onclick=cargarBase; }
   $('#set-reset').onclick=()=>{
@@ -1785,7 +1786,8 @@ function saveCardsBatch(){
   // deja VACIA a proposito: mejor sin clasificar que mal clasificada.
   valid.forEach(c=>{ state.prospects.unshift({
     id:uid(), esTarjeta:true, empresa:c.empresa||c.contacto||'(sin nombre)', contacto:c.contacto||'',
-    puesto:c.puesto||'', telefono:c.telefono||'', email:c.email||'', fuente:'Tarjeta', segmento:c.segmento||'',
+    // El telefono entra ya a 10 digitos: las tarjetas viejas traen 044 impreso.
+    puesto:c.puesto||'', telefono:telA10(c.telefono).tel, email:c.email||'', fuente:'Tarjeta', segmento:c.segmento||'',
     etapa:'Cliente nuevo', productos:[], notional:0, feeBps:25, probabilidad:10,
     proximaAccion:'Primer contacto', fechaProxima:'', notas:c.notas||'',
     creado:todayISO(), actualizado:todayISO(), actividades:[], stageHistory:[]
@@ -1895,6 +1897,68 @@ function pasarTarjetas(ids){
    duplicado (son dos personas de la misma empresa).
    No se borra a ciegas: se funde el grupo en el registro mas completo. */
 const normTel=s=>(s||'').toString().replace(/\D/g,'').slice(-10);
+
+/* ---------- Telefonos a 10 digitos ----------
+   Desde agosto de 2019 en Mexico se marca a 10 digitos: los prefijos 044 (celular
+   local), 045 (celular larga distancia) y 01 (larga distancia) YA NO EXISTEN — un
+   numero guardado con 044 sencillamente no marca. Tambien sobran el +52 y el "1"
+   de movil que iba despues del 52 (52 1 55 …).
+   Dos cosas que NO se tocan: los numeros de otro pais (escritos con + y lada
+   distinta de 52) y los que no se pueden interpretar; mejor dejarlos como estan
+   que inventarles una lada. La extension se conserva aparte. */
+const RE_EXT=/\s*(?:ext|extension|extensión|x)\.?\s*:?\s*(\d{1,6})\s*$/i;
+function telA10(valor){
+  const s=(valor||'').toString().trim();
+  if(!s) return {tel:'', estado:'vacío'};
+  let ext='';
+  const base=s.replace(RE_EXT,(m,g)=>{ ext=g; return ''; }).trim();
+  let d=base.replace(/\D/g,'');
+  if(/^\+/.test(base) && !d.startsWith('52')) return {tel:s, estado:'otro país'};
+  if(d.startsWith('00')) d=d.slice(2);
+  let mx=false;
+  if(d.length>10 && d.startsWith('52')){ d=d.slice(2); mx=true; }
+  if(mx && d.length===11 && d.startsWith('1')) d=d.slice(1);
+  while(d.length>10){
+    if(d.startsWith('044')||d.startsWith('045')) d=d.slice(3);
+    else if(d.length===12 && d.startsWith('01')) d=d.slice(2);
+    else break;
+  }
+  if(d.length!==10) return {tel:s, estado:'revisar'};
+  // Presentacion mexicana: lada de 2 digitos (55/33/81) va 2-4-4; las demas 3-3-4.
+  const dos=/^(55|33|81)/.test(d);
+  const fmt=dos ? d.slice(0,2)+' '+d.slice(2,6)+' '+d.slice(6)
+                : d.slice(0,3)+' '+d.slice(3,6)+' '+d.slice(6);
+  const out=fmt+(ext?' Ext. '+ext:'');
+  return {tel:out, estado: out===s ? 'ya estaba' : 'corregido'};
+}
+// Pasa TODOS los contactos (cartera y tarjetas) a 10 digitos.
+function normalizarTelefonos(){
+  const todos=(state.prospects||[]);
+  const cuenta={corregido:0,'ya estaba':0,'otro país':0,'revisar':0};
+  const dudosos=[];
+  todos.forEach(p=>{
+    if(!(p.telefono||'').toString().trim()) return;
+    const r=telA10(p.telefono);
+    cuenta[r.estado]=(cuenta[r.estado]||0)+1;
+    if(r.estado==='revisar') dudosos.push(p.empresa+': '+p.telefono);
+  });
+  if(!cuenta.corregido){ toast('Todos los teléfonos ya están a 10 dígitos ✓'); return; }
+  const muestra=dudosos.slice(0,8).map(x=>'• '+x).join('\n');
+  if(!confirm(`Se van a dejar a 10 dígitos ${cuenta.corregido} teléfono(s), quitando 044, 045, 01 y +52.\n\n`
+    +`Ya estaban bien: ${cuenta['ya estaba']}\n`
+    +`De otro país (no se tocan): ${cuenta['otro país']}\n`
+    +`No se pudieron interpretar (se dejan igual): ${cuenta.revisar}`
+    +(dudosos.length?`\n\n${muestra}${dudosos.length>8?'\n… y '+(dudosos.length-8)+' más':''}`:'')
+    +`\n\n¿Aplicar?`)) return;
+  let n=0;
+  todos.forEach(p=>{
+    const t=(p.telefono||'').toString().trim(); if(!t) return;
+    const r=telA10(t);
+    if(r.estado==='corregido'){ p.telefono=r.tel; p.actualizado=todayISO(); n++; }
+  });
+  save(); render();
+  toast(n+' teléfono(s) a 10 dígitos ✓');
+}
 const normMail=s=>(s||'').toString().trim().toLowerCase();
 // Que tan lleno esta un registro; decide cual sobrevive a la fusion.
 function completitud(p){
