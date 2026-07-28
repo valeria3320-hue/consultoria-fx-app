@@ -1907,13 +1907,16 @@ const normTel=s=>(s||'').toString().replace(/\D/g,'').slice(-10);
    distinta de 52) y los que no se pueden interpretar; mejor dejarlos como estan
    que inventarles una lada. La extension se conserva aparte. */
 const RE_EXT=/\s*(?:ext|extension|extensión|x)\.?\s*:?\s*(\d{1,6})\s*$/i;
-function telA10(valor){
+function telA10(valor, asumirCDMX){
   const s=(valor||'').toString().trim();
   if(!s) return {tel:'', estado:'vacío'};
   let ext='';
   const base=s.replace(RE_EXT,(m,g)=>{ ext=g; return ''; }).trim();
   let d=base.replace(/\D/g,'');
-  if(/^\+/.test(base) && !d.startsWith('52')) return {tel:s, estado:'otro país'};
+  // De otro pais solo si trae + Y no empieza con lada 52 ni con un prefijo viejo
+  // mexicano: en la base hay un "+(044) 55 …" que es de aqui, mal escrito.
+  if(/^\+/.test(base) && !d.startsWith('52') && !/^(044|045|01)/.test(d))
+    return {tel:s, estado:'otro país'};
   if(d.startsWith('00')) d=d.slice(2);
   let mx=false;
   if(d.length>10 && d.startsWith('52')){ d=d.slice(2); mx=true; }
@@ -1923,6 +1926,9 @@ function telA10(valor){
     else if(d.length===12 && d.startsWith('01')) d=d.slice(2);
     else break;
   }
+  // Numeros de 8 digitos: formato viejo del DF, cuando se marcaba sin lada.
+  // Solo se completan si quien llama lo pide explicitamente — no todos son CDMX.
+  if(asumirCDMX && d.length===8) d='55'+d;
   if(d.length!==10) return {tel:s, estado:'revisar'};
   // Presentacion mexicana: lada de 2 digitos (55/33/81) va 2-4-4; las demas 3-3-4.
   const dos=/^(55|33|81)/.test(d);
@@ -1956,6 +1962,20 @@ function normalizarTelefonos(){
     const r=telA10(t);
     if(r.estado==='corregido'){ p.telefono=r.tel; p.actualizado=todayISO(); n++; }
   });
+  // Segunda pasada, aparte y solo si ella lo autoriza: los de 8 digitos son del
+  // formato viejo del DF. Casi todos son CDMX, pero un 8 digitos de Guadalajara
+  // o Monterrey se veria igual — por eso NO se asume, se pregunta.
+  const ocho=todos.filter(p=>((p.telefono||'').toString().replace(/\D/g,'').length===8));
+  if(ocho.length){
+    const ej=ocho.slice(0,6).map(p=>'• '+(p.empresa||'?')+': '+p.telefono).join('\n');
+    if(confirm(`Quedan ${ocho.length} teléfono(s) de 8 dígitos, del formato viejo del DF `
+      +`(antes se marcaba sin lada).\n\n${ej}${ocho.length>6?'\n… y '+(ocho.length-6)+' más':''}\n\n`
+      +`¿Les pongo la lada 55 de CDMX?\n`
+      +`OJO: si alguno es de Guadalajara o Monterrey quedaría mal y habría que corregirlo a mano.`)){
+      ocho.forEach(p=>{ const r=telA10(p.telefono,true);
+        if(r.estado==='corregido'){ p.telefono=r.tel; p.actualizado=todayISO(); n++; } });
+    }
+  }
   save(); render();
   toast(n+' teléfono(s) a 10 dígitos ✓');
 }
