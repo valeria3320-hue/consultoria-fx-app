@@ -70,6 +70,14 @@ function migrate(s){
     if(!s.industries.some(i=>i&&i.name==='Servicios/Tecnología'))
       s.industries.push({name:'Servicios/Tecnología',vars:['usdmxn','eurusd','banxico'],tip:'Licencias, nube y equipo en USD; honorarios y contratos en divisa.'});
   }
+  // Igual para Salud/Farma: sin ella, las tarjetas de equipo medico y farmaceutica
+  // caian en "Manufactura/Automotriz" o se quedaban en blanco.
+  if(!s._indSalud){
+    s._indSalud=true;
+    s.industries=s.industries||[];
+    if(!s.industries.some(i=>i&&i.name==='Salud/Farma'))
+      s.industries.push({name:'Salud/Farma',vars:['usdmxn','eurusd','banxico'],tip:'Insumos, equipo médico y principios activos importados en USD/EUR.'});
+  }
   if(!s.products||!s.products.length) s.products=defaultProducts();
   if(!s.industries||!s.industries.length) s.industries=defaultIndustries();
   if(!s.market) s.market={};
@@ -1980,6 +1988,7 @@ function defaultIndustries(){return [
   {name:'Retail/Comercio',vars:['usdmxn','eurusd','banxico'],tip:'Importaciones y costo de capital de trabajo.'},
   {name:'Fintech/Remesas',vars:['usdmxn','eurusd'],tip:'Volumen FX recurrente; optimizar spread.'},
   {name:'Servicios/Tecnología',vars:['usdmxn','eurusd','banxico'],tip:'Licencias, nube y equipo en USD; honorarios y contratos en divisa.'},
+  {name:'Salud/Farma',vars:['usdmxn','eurusd','banxico'],tip:'Insumos, equipo médico y principios activos importados en USD/EUR.'},
   {name:'Family Office/Patrimonio',vars:['banxico','cetes','ust10','sp500','oro'],tip:'Renta fija, money market y refugio.'},
   {name:'Construcción/Inmobiliaria',vars:['usdmxn','cobre','banxico'],tip:'Insumos, tasas y financiamiento.'},
 ];}
