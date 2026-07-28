@@ -1900,10 +1900,18 @@ function gruposDuplicados(lista){
 function fusionarGrupo(grupo){
   const orden=grupo.slice().sort((a,b)=>completitud(b)-completitud(a));
   const queda=orden[0];
+  const ETIQ={telefono:'Tel',email:'Correo',puesto:'Puesto'};
   orden.slice(1).forEach(o=>{
+    const extras=[];
     ['empresa','contacto','puesto','telefono','email','segmento'].forEach(k=>{
-      if(!(queda[k]||'').toString().trim() && (o[k]||'').toString().trim()) queda[k]=o[k];
+      const v=(o[k]||'').toString().trim(), hay=(queda[k]||'').toString().trim();
+      if(!hay && v) queda[k]=v;
+      // Si AMBAS traen dato y son distintos, el de la copia no se tira: se anota.
+      // Pasa seguido con un segundo telefono o una extension (misma persona,
+      // dos tarjetas) y perderlo seria justo el dato que sirve para llamar.
+      else if(v && hay && v!==hay && ETIQ[k]) extras.push(ETIQ[k]+' alt.: '+v);
     });
+    if(extras.length) queda.notas=((queda.notas||'').trim()+'\n'+extras.join(' · ')).trim();
     const nn=(o.notas||'').trim();
     if(nn && !(queda.notas||'').includes(nn)) queda.notas=((queda.notas||'').trim()+'\n'+nn).trim();
     queda.actividades=queda.actividades||[];
