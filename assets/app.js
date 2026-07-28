@@ -135,8 +135,14 @@ function mergeStates(a,b){
   const older=(newer===a)?b:a;
   const out=JSON.parse(JSON.stringify(newer));
   out.prospects=out.prospects||[];
+  // TUMBAS: ids borrados a proposito. Sin esto la fusion RESUCITA lo borrado,
+  // porque unir por id solo sabe agregar: lo que esta en la copia vieja y no en
+  // la nueva se vuelve a meter. Paso de verdad — se depuraron 31 tarjetas
+  // repetidas y una re-sincronizacion a media clasificacion las regreso todas.
+  const tumbas=Object.assign({},(older.borrados||{}),(newer.borrados||{}));
   const byId=new Map(out.prospects.map(p=>[p.id,p]));
   (older.prospects||[]).forEach(p=>{
+    if(tumbas[p.id]) return;                       // borrado a proposito: no revive
     const q=byId.get(p.id);
     if(!q){ out.prospects.push(p); return; }
     q.actividades=q.actividades||[]; q.stageHistory=q.stageHistory||[];
@@ -145,10 +151,30 @@ function mergeStates(a,b){
     const sh=new Set(q.stageHistory.map(x=>JSON.stringify(x)));
     (p.stageHistory||[]).forEach(x=>{ if(!sh.has(JSON.stringify(x)))q.stageHistory.push(x); });
   });
+  // Y lo que el OTRO dispositivo borro tambien se va de este lado.
+  out.prospects=out.prospects.filter(p=>!tumbas[p.id]);
+  // Las tumbas se guardan 90 dias: tiempo de sobra para que todos los
+  // dispositivos se enteren, sin que la lista crezca para siempre.
+  const corte=Date.now()-90*24*3600*1000;
+  out.borrados={};
+  Object.keys(tumbas).forEach(id=>{
+    const f=tumbas[id];
+    if(new Date(f).getTime()>corte) out.borrados[id]=f;
+  });
   out.notes=out.notes||[];
   const nid=new Set(out.notes.map(n=>n.id));
   ((older.notes)||[]).forEach(n=>{ if(!nid.has(n.id))out.notes.push(n); });
   return out;
+}
+// Unico camino para borrar registros: deja tumba para que la fusion los respete.
+function borrarProspects(ids){
+  const set=new Set(ids); if(!set.size) return 0;
+  const antes=(state.prospects||[]).length;
+  state.prospects=(state.prospects||[]).filter(p=>!set.has(p.id));
+  state.borrados=state.borrados||{};
+  const hoy=new Date().toISOString();
+  set.forEach(id=>{ state.borrados[id]=hoy; });
+  return antes-(state.prospects||[]).length;
 }
 
 // Al volver a la app (cambio de pestaña / desbloquear el cel), bajar cambios de la nube.
@@ -708,7 +734,7 @@ function openClient(id){
   $('#drawer-sched').onclick=()=>openSchedule(id);
   $('#drawer-cot').onclick=()=>{closeDrawer();ui.view='cotizador';ui.cotCliente=id;render();};
   $('#drawer-edit').onclick=()=>{closeDrawer();openProspect(id);};
-  $('#drawer-del').onclick=()=>{ if(confirm('¿Eliminar este cliente? No se puede deshacer.')){ state.prospects=state.prospects.filter(x=>x.id!==id); save(); closeDrawer(); render(); toast('Cliente eliminado'); } };
+  $('#drawer-del').onclick=()=>{ if(confirm('¿Eliminar este cliente? No se puede deshacer.')){ borrarProspects([id]); save(); closeDrawer(); render(); toast('Cliente eliminado'); } };
   $$('#drawer-client [data-setstage]').forEach(b=>b.onclick=()=>{ if(b.dataset.setstage!==p.etapa){ closeDrawer(); openMove(id,b.dataset.setstage); } });
   // Verificación de contacto: registra el resultado de la llamada.
   $$('#drawer-client [data-verif]').forEach(b=>b.onclick=()=>{
@@ -1935,9 +1961,9 @@ function depurarDuplicados(lista){
     +`\n\nSe queda la más completa de cada grupo y se le copian los datos, notas y actividades de las otras. ¿Depurar?`)) return;
   const quitar=new Set();
   grupos.forEach(g=>fusionarGrupo(g).forEach(id=>quitar.add(id)));
-  state.prospects=(state.prospects||[]).filter(p=>!quitar.has(p.id));
+  const n=borrarProspects([...quitar]);
   save(); render();
-  toast(`${quitar.size} repetida(s) fusionada(s) ✓`);
+  toast(`${n} repetida(s) fusionada(s) ✓`);
 }
 
 function updateRevenuePreview(){const f=$('#form-prospect');const n=Number(f.elements.notional.value)||0,b=Number(f.elements.feeBps.value)||0;$('#revenue-preview').textContent=n&&b?`Ingreso estimado: ${fmtUSD(Math.round(n*b/10000))} (${b} bps sobre ${fmtUSD(n)})`:'Ingreso estimado: —';}
