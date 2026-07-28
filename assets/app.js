@@ -225,6 +225,9 @@ function cartera(){ return (state.prospects||[]).filter(p=>!p.esTarjeta); }
 function bandeja(){ return (state.prospects||[]).filter(p=>p.esTarjeta); }
 // Lista sobre la que trabajan tabla/kanban/filtros segun la seccion abierta.
 function scopeList(){ return ui.view==='tarjetas' ? bandeja() : cartera(); }
+// Orden alfabetico en espanol: ignora acentos y mayusculas ("Ávila" junto a "Avila")
+// y trata los numeros como numeros ("Grupo 2" antes que "Grupo 10").
+const porNombre=(a,b)=>(a.empresa||'').localeCompare((b.empresa||''),'es',{sensitivity:'base',numeric:true});
 /* Opciones del selector de cliente en Cotizador / Perfilador / Propuestas.
    Incluye la cartera Y las tarjetas escaneadas, en grupos separados: las tarjetas
    se trabajan desde su propia seccion, asi que hay que poder cotizarlas y
@@ -232,7 +235,7 @@ function scopeList(){ return ui.view==='tarjetas' ? bandeja() : cartera(); }
    asi que todo lo de abajo (guardar cotizacion, actividad, propuesta) ya funciona. */
 function opcionesCliente(sel){
   const opt=p=>`<option value="${p.id}" ${sel===p.id?'selected':''}>${esc(p.empresa)}</option>`;
-  const c=cartera(), t=bandeja().slice().sort((a,b)=>(a.empresa||'').localeCompare(b.empresa||'','es'));
+  const c=cartera().slice().sort(porNombre), t=bandeja().slice().sort(porNombre);
   if(!t.length) return c.map(opt).join('');
   return (c.length?`<optgroup label="Clientes">${c.map(opt).join('')}</optgroup>`:'')
     +`<optgroup label="📇 Tarjetas">${t.map(opt).join('')}</optgroup>`;
@@ -532,7 +535,9 @@ function topOps(){
 /* ---------- PIPELINE ---------- */
 const KANBAN_CAP=60;
 function renderPipeline(target){
-  const cols=STAGES.map(s=>{const arr=filtered().filter(p=>p.etapa===s).sort((a,b)=>((b.potencial==='alto')-(a.potencial==='alto'))||(compScore(b)-compScore(a))),sum=arr.reduce((a,p)=>a+revenueOf(p),0);
+  // En el kanban la columna se corta en KANBAN_CAP, asi que arriba van los mejores;
+  // el nombre entra como ultimo criterio para que el orden sea estable y buscable.
+  const cols=STAGES.map(s=>{const arr=filtered().filter(p=>p.etapa===s).sort((a,b)=>((b.potencial==='alto')-(a.potencial==='alto'))||(compScore(b)-compScore(a))||porNombre(a,b)),sum=arr.reduce((a,p)=>a+revenueOf(p),0);
     const shown=arr.slice(0,KANBAN_CAP);
     const moreNote=arr.length>KANBAN_CAP?`<div class="muted" style="padding:10px;font-size:11px;text-align:center;border-top:1px solid var(--line)">+${arr.length-KANBAN_CAP} más · velos en <b>Clientes</b></div>`:'';
     return `<div class="kcol" data-stage="${s}"><div class="kcol-head"><span style="color:${STAGE_COLOR[s]}">${s}</span><span class="cnt">${arr.length}</span></div><div class="kcol-sum">${fmtUSD(sum)}</div><div class="kcol-body">${shown.map(card).join('')}${moreNote}</div></div>`;}).join('');
@@ -583,7 +588,12 @@ function renderClientes(target){
   const segs=segNames().map(s=>({s,n:base.filter(p=>p.segmento===s).length})).filter(x=>x.n);
   const conDatos=base.filter(p=>compScore(p)>0).length, sinDatos=base.length-conDatos;
   const superN=base.filter(p=>p.potencial==='alto').length;
-  const arr=filtered().slice().sort((a,b)=>(ui.filtroDatos==='operaba'?(operabaScore(b)-operabaScore(a)):0)||((b.potencial==='alto')-(a.potencial==='alto'))||(compScore(b)-compScore(a)));
+  // Orden ALFABETICO por defecto: con 330 tarjetas y 2,144 clientes lo que se
+  // necesita es encontrar a alguien por nombre. Las dos colas donde el orden ES
+  // el mensaje (a quien llamar primero) ya vienen rankeadas desde filtered() y
+  // NO se re-ordenan — antes este sort las pisaba y deshacia la cola.
+  const rankeado=ui.filtroDatos==='operaba'||ui.filtroDatos==='porverif';
+  const arr=rankeado?filtered():filtered().slice().sort(porNombre);
   const rows=arr.map(p=>`<tr data-client="${p.id}" style="cursor:pointer">
     <td><strong>${p.potencial==='alto'?'⭐ ':''}${esc(p.empresa)}</strong><div class="meta">${esc(p.contacto||'—')}${p.puesto?' · '+esc(p.puesto):''}</div></td>
     <td>${compBadge(p)}</td>
