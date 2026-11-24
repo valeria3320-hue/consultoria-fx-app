@@ -130,6 +130,34 @@ window.DB = (function(){
       }
     },
 
+    // LEADS de la pagina publica (calculadora.html). Los escribe la funcion
+    // serverless con la llave de servicio; aqui solo se leen y se marcan como
+    // atendidos. Son de la casa, no de una cartera: los ven los dos socios.
+    async leads(){
+      if (!cloud) return [];
+      const { data, error } = await sb.from('leads')
+        .select('*').order('creado', { ascending:false }).limit(200);
+      if (error) throw new Error(error.message);
+      return data || [];
+    },
+    async marcarLead(id, atendido){
+      if (!cloud) throw new Error('Disponible solo en modo nube');
+      const { error } = await sb.from('leads').update({ atendido: !!atendido }).eq('id', id);
+      if (error) throw new Error(error.message);
+    },
+
+    // CORRIDAS de lo que se manda solo (la nota diaria). Las escriben las
+    // funciones serverless; aqui solo se leen, para el semaforo de Mi Dia.
+    // Nunca truena: si la tabla no existe todavia (base sin actualizar) se
+    // devuelve vacio y el panel lo dice, en vez de romper la pantalla.
+    async corridas(n){
+      if (!cloud) return [];
+      const { data, error } = await sb.from('corridas')
+        .select('*').order('corrio', { ascending:false }).limit(n || 10);
+      if (error) return [];
+      return data || [];
+    },
+
     // ADMIN: cartera de todos los socios (solo lectura agregada).
     async loadAll(){
       if (cloud){

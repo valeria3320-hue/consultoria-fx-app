@@ -14,13 +14,31 @@ const STAGE_COLOR = {'Cliente nuevo':'#4c8dff','Contactado':'#a371f7','Reunión'
 
 const MARKET = [
   {k:'usdmxn',label:'USD/MXN',unit:''},{k:'eurusd',label:'EUR/USD',unit:''},{k:'eurmxn',label:'EUR/MXN',unit:''},
-  {k:'brent',label:'Brent',unit:'USD'},{k:'wti',label:'WTI',unit:'USD'},{k:'gasnat',label:'Gas natural',unit:'USD'},
+  {k:'brent',label:'Brent',unit:'USD/bbl'},{k:'wti',label:'WTI',unit:'USD/bbl'},{k:'gasnat',label:'Gas natural',unit:'USD/MMBtu'},
   {k:'oro',label:'Oro',unit:'USD/oz'},{k:'cobre',label:'Cobre',unit:'USD/lb'},{k:'aluminio',label:'Aluminio',unit:'USD/t'},
   {k:'maiz',label:'Maíz',unit:'USD/bu'},{k:'trigo',label:'Trigo',unit:'USD/bu'},{k:'soya',label:'Soya',unit:'USD/bu'},
   {k:'cafe',label:'Café',unit:'USD/lb'},{k:'azucar',label:'Azúcar',unit:'USD/lb'},
   {k:'sp500',label:'S&P 500',unit:''},{k:'banxico',label:'Tasa Banxico',unit:'%'},{k:'cetes',label:'Cetes 28d',unit:'%'},{k:'ust10',label:'UST 10a',unit:'%'},
 ];
 const MLAB = Object.fromEntries(MARKET.map(m=>[m.k,m]));
+/* CENTAVOS -> DOLARES. CME e ICE cotizan granos y blandos en centavos: Yahoo
+   devuelve 430 para el maiz, que son 4.30 USD/bu. Sin esto la nota sale con un
+   error de 100x y quien sabe de agro lo caza en el primer renglon.
+   OJO: este catalogo esta duplicado en netlify/lib/nota.js porque el repo no
+   tiene paso de compilacion. Si cambia aqui, cambia alla. */
+const ESCALA = { maiz:0.01, trigo:0.01, soya:0.01, cafe:0.01, azucar:0.01 };
+/* Banda de sanidad: no adivina el mercado, caza errores de unidad y respuestas
+   corruptas. Si un valor cae fuera, se omite en vez de publicarlo. */
+const BANDA = {
+  usdmxn:[10,40], eurusd:[0.5,2], eurmxn:[10,60], dxy:[70,130],
+  brent:[20,250], wti:[10,250], gasnat:[0.5,30],
+  oro:[500,10000], plata:[5,200], cobre:[1,15], aluminio:[800,6000],
+  maiz:[2,20], trigo:[2,25], soya:[5,40], cafe:[0.5,10], azucar:[0.05,1.5],
+  sp500:[1000,20000], dow:[5000,100000], nasdaq:[1000,50000],
+  ipcmx:[20000,200000], nikkei:[5000,100000], dax:[5000,50000], vix:[5,100],
+  banxico:[0,30], cetes:[0,30], ust10:[0,15],
+};
+function plausibleMkt(k,v){ const b=BANDA[k]; if(!b||!isFinite(v)) return isFinite(v); return v>=b[0]&&v<=b[1]; }
 const XLAB = {dow:'Dow Jones',nasdaq:'Nasdaq',ipcmx:'IPC México',nikkei:'Nikkei',dax:'DAX',vix:'VIX',plata:'Plata',dxy:'DXY (índice dólar)'};
 function lbl(k){ return MLAB[k]?MLAB[k].label:(XLAB[k]||k); }
 
@@ -39,9 +57,141 @@ const COT_TIPOS = {
     {k:'monto',label:'Monto a invertir',ph:'1000000'},{k:'tasa',label:'Tasa anual (%)',ph:'11.0',step:'0.01'},{k:'dias',label:'Plazo (días)',ph:'28'}]},
 };
 
+/* ---------- LÍNEAS DE COBERTURA Y RANGO DE ACCIÓN --------------------------
+   La mesa no vende dólares baratos: vende cobertura. El spread es la puerta de
+   entrada (es lo unico que el cliente ya sabe medir y comparar), pero el
+   negocio esta en el programa: nocional recurrente, comision sobre nocional y
+   una relacion que se renueva en cada vencimiento en vez de morir en la
+   operacion. Un ahorro de spread se agradece una vez; una politica de
+   cobertura se revisa cada trimestre.
+
+   Tres lineas, que son justo las que la mesa puede operar con sus proveedores:
+     · Tipo de cambio  — forwards, collares, swaps        (Marex · StoneX)
+     · Tasas           — IRS y caps sobre deuda variable  (Marex)
+     · Commodities     — energia, metales y agro          (StoneX · ADM · Marex)
+
+   El RANGO DE ACCION es lo que se puede poner sobre la mesa en la PRIMERA
+   llamada, segun el tamaño de la exposicion. Sirve para dos cosas:
+     1. Que quien llama sepa a que le tira ANTES de marcar. No es lo mismo
+        abrir pidiendo "quince minutos para dimensionar" que llegar con una
+        politica de cobertura para el comite: el mismo guion en el prospecto
+        equivocado quema la llamada.
+     2. Que ese alcance quede escrito en la ficha al entregar la lista y se vea
+        en el pipeline. La tarjeta deja de decir solo un nombre y dice linea,
+        rango y nocional, asi que el tablero pasa de "quien" a "cuanto y de que".
+---------------------------------------------------------------------------- */
+const LINEAS = {
+  fx:     {icon:'💵',  label:'Tipo de cambio', corto:'FX',          bps:25, prov:'Marex · StoneX'},
+  tasas:  {icon:'📈',  label:'Tasas',          corto:'Tasas',       bps:10, prov:'Marex'},
+  commod: {icon:'🛢️', label:'Commodities',    corto:'Commodities', bps:25, prov:'StoneX · ADM · Marex'},
+};
+
+/* Industria -> lineas aplicables, la primera es la que abre la conversacion.
+   Sale del mismo criterio que ya usaban las jugadas del generador de propuestas:
+   no es una taxonomia nueva, es la misma vista desde la llamada. */
+const LINEA_POR_SEG = {
+  'Importador/Exportador':     ['fx','tasas'],
+  'Manufactura/Automotriz':    ['fx','commod','tasas'],
+  'Aerolínea/Transporte':      ['commod','fx'],
+  'Agroindustria':             ['commod','fx'],
+  'Energía/Combustibles':      ['commod','fx','tasas'],
+  'Minería/Metales':           ['commod','fx'],
+  'Retail/Comercio':           ['fx','tasas'],
+  'Fintech/Remesas':           ['fx'],
+  'Servicios/Tecnología':      ['fx'],
+  'Salud/Farma':               ['fx'],
+  'Family Office/Patrimonio':  ['tasas'],
+  'Construcción/Inmobiliaria': ['tasas','commod','fx'],
+};
+
+/* Lo que diga la ficha gana sobre la industria: si en las notas del .xls viejo
+   dice "turbosina" o "deuda variable", eso es informacion de primera mano y la
+   industria es apenas un promedio. */
+const PISTAS_LINEA = [
+  {l:'commod', re:/combustible|turbosina|jet ?fuel|di[eé]sel|crudo|brent|gas nat|cobre|alumini|acero|metal|ma[ií]z|trigo|soya|caf[eé]|az[uú]car|grano|commodit/i},
+  {l:'tasas',  re:/tasa variable|tasa fija|deuda|cr[eé]dito|apalanc|\birs\b|\btiie\b|banxico|financiamiento|arrendamiento/i},
+  {l:'fx',     re:/d[oó]lar|divisa|tipo de cambio|forward|\busd\b|\bfx\b|importa|exporta|cobertura=si/i},
+];
+
+function lineasDe(p){
+  if(!p) return ['fx'];
+  const txt=[p.notas,p.proximaAccion,(p.productos||[]).map(prodName).join(' ')].filter(Boolean).join(' ');
+  const porTexto=PISTAS_LINEA.filter(x=>x.re.test(txt)).map(x=>x.l);
+  // Las industrias son editables desde Ajustes: si la ficha de la industria ya
+  // trae su linea, esa manda sobre el mapa fijo de abajo.
+  const ind=((state&&state.industries)||[]).find(i=>i.name===p.segmento);
+  const porSeg=(ind&&LINEAS[ind.linea]?[ind.linea]:[]).concat(LINEA_POR_SEG[p.segmento]||[]);
+  const out=[...new Set([...porTexto,...porSeg])];
+  return out.length?out:['fx'];
+}
+function lineaDe(p){ return lineasDe(p)[0]; }
+
+/* Los cortes son de exposicion ANUAL en USD (o el equivalente del insumo).
+   No son arbitrarios: debajo de 250 mil al año una cobertura formal cuesta mas
+   en tiempo del que deja, y arriba de 5 millones la decision ya no la toma una
+   persona sino un comite — y eso cambia a quien hay que pedirle la cita. */
+const RANGOS = [
+  {k:'A', min:5e6,   label:'Programa',       color:'#16a34a', etapa:'Reunión',    cubrir:70,
+   alcance:'Política de cobertura por escrito y programa a 12 meses',
+   objetivo:'Diagnóstico de exposición con dirección o comité (60 min)'},
+  {k:'B', min:1e6,   label:'Estructurada',   color:'#0d9488', etapa:'Reunión',    cubrir:60,
+   alcance:'Cobertura estructurada sobre el descalce neto',
+   objetivo:'Reunión de 30 min con sus propios números'},
+  {k:'C', min:250e3, label:'Primer forward', color:'#d97706', etapa:'Propuesta',  cubrir:50,
+   alcance:'Un primer forward o collar sobre la operación más próxima',
+   objetivo:'Cotizar en firme la siguiente operación'},
+  {k:'D', min:0,     label:'Diagnóstico',    color:'#64748b', etapa:'Contactado', cubrir:0,
+   alcance:'Medir la exposición: todavía no hay cifra que cubrir',
+   objetivo:'15 min para dimensionar cuánto mueven al año'},
+];
+
+const INSTRUMENTO = {
+  fx: {A:'Programa de forwards escalonados + collar sobre el neto',
+       B:'Forward escalonado a 6 meses',
+       C:'Forward simple sobre la próxima operación',
+       D:'Medir la exposición antes de proponer instrumento'},
+  tasas: {A:'IRS sobre el grueso de la deuda + cap sobre el remanente',
+       B:'IRS al plazo de la deuda',
+       C:'Cap de tasa (techo con prima acotada)',
+       D:'Levantar saldo y perfil de vencimientos'},
+  commod: {A:'Programa por trimestre + collar a costo cero',
+       B:'Swap o forward del insumo a 6 meses',
+       C:'Collar o call spread sobre el próximo embarque',
+       D:'Cuantificar el consumo anual del insumo'},
+};
+
+function rangoPorNocional(n){ return RANGOS.find(x=>(Number(n)||0)>=x.min)||RANGOS[RANGOS.length-1]; }
+
+/* La accion SUGERIDA por los datos de la ficha. */
+function accionDe(p){
+  const linea=lineaDe(p), L=LINEAS[linea];
+  const nocional=Number(p&&p.notional)||0;
+  const r=rangoPorNocional(nocional);
+  return {linea, L, rango:r.k, r, instrumento:INSTRUMENTO[linea][r.k], nocional,
+          fee:nocional?Math.round(nocional*L.bps/10000):0, etapaMeta:r.etapa, asignado:false};
+}
+/* La accion COMPROMETIDA: la que quedo escrita en la ficha al entregar la lista.
+   Es la que manda en el pipeline — lo sugerido es una hipotesis, lo entregado
+   es lo que alguien de verdad va a ir a proponer. */
+function accionVigente(p){
+  const a=p&&p.accion;
+  if(!a||!LINEAS[a.linea]) return accionDe(p);
+  const L=LINEAS[a.linea], r=RANGOS.find(x=>x.k===a.rango)||RANGOS[RANGOS.length-1];
+  const nocional=Number(a.nocional)||0;
+  return {linea:a.linea, L, rango:r.k, r, instrumento:a.instrumento||INSTRUMENTO[a.linea][r.k],
+          nocional, fee:nocional?Math.round(nocional*L.bps/10000):0, etapaMeta:r.etapa, asignado:true};
+}
+function chipAccion(p,{corto=false}={}){
+  const a=accionVigente(p);
+  const t=corto?`${a.L.icon} ${a.L.corto} ${a.rango}`:`${a.L.icon} ${a.L.corto} · Rango ${a.rango}`;
+  return `<span class="acc-chip${a.asignado?' asignado':''}" style="--acc:${a.r.color}"
+    title="${esc(a.instrumento)} — ${esc(a.r.alcance)}${a.asignado?' · asignado al entregar la lista':' · sugerido'}">${t}</span>`;
+}
+
 /* ---------- Estado / sesión ---------- */
 let state, ME=null, saveTimer=null;
-let ui = { view:'midia', search:'', filtroSeg:'', filtroProd:'', filtroEtapa:'', filtroDatos:'', noteFmt:'whatsapp', noteModo:'apertura', noteAlcance:'industria', noteIndustria:'', cotTipo:'ahorro', cotCliente:'', cotText:'', perfCliente:'', perfText:'', perfData:null, tjVista:'lista', propJugada:'fx_importador', propCliente:'', propText:'', propData:null };
+let ui = { view:'midia', search:'', filtroSeg:'', filtroProd:'', filtroEtapa:'', filtroDatos:'', noteFmt:'whatsapp', noteModo:'apertura', noteAlcance:'industria', noteIndustria:'', cotTipo:'ahorro', cotCliente:'', cotText:'', perfCliente:'', perfText:'', perfData:null, tjVista:'lista', propJugada:'fx_importador', propCliente:'', propText:'', propData:null,
+  mancN:10, mancLinea:'', mancTarjetas:false, mancText:'', mancUndo:null, leads:[], leadsErr:null, filtroLinea:'', filtroRango:'' };
 
 function migrate(s){
   if(!s.brand) s.brand='Insitum Capital';
@@ -80,6 +230,16 @@ function migrate(s){
   }
   if(!s.products||!s.products.length) s.products=defaultProducts();
   if(!s.industries||!s.industries.length) s.industries=defaultIndustries();
+  // Las industrias guardadas antes del cambio de estrategia no traen `linea`.
+  // Sin esto todo seguiria funcionando (LINEA_POR_SEG cubre las 12 por nombre),
+  // pero una industria que la usuaria haya renombrado o creado a mano se
+  // quedaria sin linea para siempre. Se rellena una sola vez con el catalogo
+  // por omision, respetando lo que ya este puesto.
+  if(!s._indLinea){
+    s._indLinea=true;
+    const def=Object.fromEntries(defaultIndustries().map(i=>[i.name,i.linea]));
+    (s.industries||[]).forEach(i=>{ if(i&&!i.linea&&def[i.name]) i.linea=def[i.name]; });
+  }
   if(!s.market) s.market={};
   if(!s.notes) s.notes=[];
   (s.prospects||[]).forEach(p=>{ if(!p.id)p.id=uid(); if(p.etapa==='Prospecto')p.etapa='Cliente nuevo'; if(p.etapa==='Cliente activo')p.etapa='Cliente recurrente'; p.actividades=p.actividades||[]; p.stageHistory=p.stageHistory||[]; });
@@ -334,6 +494,11 @@ function showLogin(){
   if(!demo){ const last=localStorage.getItem('cfx_last_email'); if(last)$('#form-login').email.value=last; }
   const fg=$('#btn-forgot'); if(fg)fg.classList.toggle('hidden',demo);
   const su=$('#btn-signup-toggle'); if(su)su.classList.toggle('hidden',demo||!DB.allowSignup);
+  // Con el registro cerrado, quien no tiene cuenta se queda mirando un formulario
+  // sin ninguna salida: no hay boton de alta y nada le dice por que. Desde fuera
+  // eso no se lee como "me falta cuenta", se lee como "esto no sirve / no lo
+  // encuentro". Se le dice en una linea a quien pedirsela.
+  const sa=$('#login-sinalta'); if(sa)sa.classList.toggle('hidden',demo||DB.allowSignup);
   signupMode=false; applyAuthMode();
   $('#login').classList.remove('hidden'); $('#app').classList.add('hidden');
 }
@@ -365,6 +530,12 @@ function startApp(){
   $('#user-avatar').textContent = (name[0]||'?').toUpperCase();
   $('#privacy-note').textContent = DB.cloud? '☁️ Datos en la nube, sincronizados.' : '🔒 Tus datos viven en este dispositivo. Respalda seguido.';
   render();
+  // Leads de la pagina publica: se traen en segundo plano para que el contador
+  // del menu aparezca solo, sin que haya que entrar a la seccion a buscarlos.
+  cargarLeads(true).then(()=>{ if(leadsPend()||ui.view==='leads') render(); });
+  // Semaforo de lo que corre solo: si la nota diaria no salio, se ve AQUI, en la
+  // primera pantalla, el mismo dia. Antes solo se sabia entrando a Netlify.
+  cargarCorridas().then(()=>{ if(ui.view==='midia') render(); });
   // Base de clientes: ofrecer al inicio, o ACTUALIZAR SOLA si detecta una versión nueva.
   if(window.BASE_CLIENTES && window.BASE_CLIENTES.length){
     const hasImports=state.prospects.some(p=>(p.notas||'').includes('Importado:'));
@@ -388,11 +559,92 @@ function render(){
   $$('.view').forEach(v=>v.classList.add('hidden'));
   $('#view-'+ui.view).classList.remove('hidden');
   $$('.nav-btn').forEach(b=>b.classList.toggle('active',b.dataset.view===ui.view));
-  const titles={midia:['Mi Día','Tu plan de acción de hoy'],resumen:['Resumen','Salud de tu cartera'],pipeline:['Pipeline','Arrastra clientes por la cadena'],clientes:['Clientes','CRM: ficha completa'],tarjetas:['Tarjetas','Escaneadas, aparte de tu cartera — revísalas y pásalas a Clientes'],propuestas:['Propuestas','Genera una propuesta de valor en segundos'],cotizador:['Cotizador','Calcula y envía cotizaciones'],perfilador:['Perfilador','Califica prospectos en 2 minutos: exposición, dolor y decisión'],seguimiento:['Seguimiento','Tu agenda de acciones'],notas:['Notas de mercado','Apertura y cierre por industria'],productos:['Productos','Catálogo editable'],equipo:['Equipo','Cartera consolidada de socios'],playbook:['Playbook','Metodología'],ajustes:['Ajustes','Marca, industrias y datos']};
+  const titles={midia:['Mi Día','Tu plan de acción de hoy'],mancuerna:['Mancuerna','La lista de llamadas de hoy, lista para mandar por WhatsApp'],leads:['Leads','Los que llegaron solos por la página pública'],resumen:['Resumen','Salud de tu cartera'],pipeline:['Pipeline','Arrastra clientes por la cadena'],clientes:['Clientes','CRM: ficha completa'],tarjetas:['Tarjetas','Escaneadas, aparte de tu cartera — revísalas y pásalas a Clientes'],propuestas:['Propuestas','Genera una propuesta de valor en segundos'],cotizador:['Cotizador','Calcula y envía cotizaciones'],perfilador:['Perfilador','Califica prospectos en 2 minutos: exposición, dolor y decisión'],seguimiento:['Seguimiento','Tu agenda de acciones'],notas:['Notas de mercado','Apertura y cierre por industria'],productos:['Productos','Catálogo editable'],equipo:['Equipo','Cartera consolidada de socios'],playbook:['Playbook','Metodología'],ajustes:['Ajustes','Marca, industrias y datos']};
   $('#view-title').textContent=titles[ui.view][0]; $('#view-sub').textContent=titles[ui.view][1];
   // Contador de la bandeja en el menu
   { const b=$('#nav-tarjetas-n'), n=bandeja().length; if(b){ b.textContent=n; b.classList.toggle('hidden',!n); } }
-  ({midia:renderMiDia,resumen:renderResumen,pipeline:renderPipeline,clientes:renderClientes,tarjetas:renderTarjetas,propuestas:renderPropuestas,cotizador:renderCotizador,perfilador:renderPerfilador,seguimiento:renderSeguimiento,notas:renderNotas,productos:renderProductos,equipo:renderEquipo,playbook:renderPlaybook,ajustes:renderAjustes}[ui.view])();
+  // Leads sin atender: es lo unico del menu que pide accion el MISMO dia.
+  { const b=$('#nav-leads-n'), n=leadsPend(); if(b){ b.textContent=n; b.classList.toggle('hidden',!n); } }
+  ({midia:renderMiDia,mancuerna:renderMancuerna,leads:renderLeads,resumen:renderResumen,pipeline:renderPipeline,clientes:renderClientes,tarjetas:renderTarjetas,propuestas:renderPropuestas,cotizador:renderCotizador,perfilador:renderPerfilador,seguimiento:renderSeguimiento,notas:renderNotas,productos:renderProductos,equipo:renderEquipo,playbook:renderPlaybook,ajustes:renderAjustes}[ui.view])();
+}
+
+/* ---------------------------------------------------------------------------
+   LO QUE CORRE SOLO — semaforo de la automatizacion dentro del CRM
+   ---------------------------------------------------------------------------
+   La nota diaria sale de un servidor, no de esta app. El riesgo real de eso no
+   es que falle: es que falle CALLADA y nadie se entere en semanas. Cada corrida
+   deja una fila en `corridas` (netlify/lib/bitacora.js) y aqui se lee para
+   decir, en la primera pantalla del dia, si salio o no y que hacer.
+
+   Los textos son gemelos de los de netlify/lib/bitacora.js (EXPLICA). Estan
+   duplicados por lo mismo que lib/lineas.js: no hay paso de compilacion, asi
+   que el navegador y las funciones no pueden compartir un modulo. Si se agrega
+   un resultado nuevo, va en los DOS lados.
+--------------------------------------------------------------------------- */
+const CORRIDA_EXPLICA = {
+  enviada:            'La nota salió.',
+  nadie_pendiente:    'No había a quién mandarle: todos ya la recibieron hoy, o no hay correos válidos en la base.',
+  sin_dominio_propio: 'Falta el dominio propio del correo. Es el único paso que la detiene.',
+  mercado_sin_datos:  'No hubo datos de mercado. Sin números no se manda nada, a propósito.',
+  sin_usdmxn:         'No llegó el USD/MXN, que es el dato central. Se omitió el envío.',
+  destinatarios:      'No se pudo leer la base. Suele ser Supabase dormido.',
+  resend_fallos:      'Resend rechazó el envío. Revisa resend.com → Logs.',
+  excepcion:          'La función falló por algo no previsto.',
+};
+function explicaCorrida(r){
+  if(CORRIDA_EXPLICA[r]) return CORRIDA_EXPLICA[r];
+  if(/^falta /i.test(r||'')) return 'Faltan llaves en Netlify: '+r+'.';
+  return 'Resultado: '+(r||'desconocido')+'.';
+}
+async function cargarCorridas(){
+  if(!DB.cloud){ ui.corridas=null; return; }
+  try{ ui.corridas = await DB.corridas(10); }catch(e){ ui.corridas=null; }
+}
+// Dias habiles transcurridos desde una fecha ISO (sabado y domingo no cuentan:
+// la nota solo corre L-V, asi que un lunes la ultima corrida es del viernes y
+// eso NO es un hueco).
+function habilesDesde(iso){
+  const d=new Date(iso+'T12:00'), hoy=new Date(todayISO()+'T12:00');
+  let n=0; while(d<hoy){ d.setDate(d.getDate()+1); const w=d.getDay(); if(w!==0&&w!==6) n++; }
+  return n;
+}
+function panelAutomatizacion(){
+  if(!DB.cloud) return '';                       // en demo no hay nada que correr
+  const cs=ui.corridas;
+  const marco=(color,titulo,cuerpo)=>`<div class="panel auto-panel" style="border-left:3px solid ${color}">
+    <h3>🤖 Lo que corre solo <span class="muted">nota diaria de mercado</span></h3>
+    <div class="auto-linea"><b>${titulo}</b></div>${cuerpo}</div>`;
+
+  if(cs===null||cs===undefined)
+    return marco('var(--muted)','Todavía sin noticias de la nota diaria.',
+      `<p class="muted" style="margin:6px 0 0">Si acabas de entrar, dale un momento. Si nunca aparece, falta correr el SQL actualizado en Supabase (tabla <code>corridas</code>).</p>`);
+
+  const notas=cs.filter(c=>c.tipo==='nota-diaria');
+  if(!notas.length)
+    return marco('var(--amber)','La nota diaria aún no ha corrido ni una vez.',
+      `<p class="muted" style="margin:6px 0 0">Se dispara sola de lunes a viernes a las 7:30am. Si ya publicaste el sitio y aun así no aparece nada el siguiente día hábil, ábrelo con la liga de <b>estado</b> (está en SETUP-AUTOMATIZACION.md) y te dice qué falta.</p>`);
+
+  const u=notas[0];
+  const hueco=habilesDesde(u.fecha);
+  const fFecha=new Date(u.fecha+'T12:00').toLocaleDateString('es-MX',{weekday:'long',day:'numeric',month:'long'});
+  const rachaMala=notas.slice(0,5).filter(c=>!c.ok).length;
+
+  if(u.ok && u.enviados>0 && hueco<=1)
+    return marco('var(--green)',`✅ Salió: ${num(u.enviados)} correo${u.enviados===1?'':'s'} el ${fFecha}.`,
+      `<p class="muted" style="margin:6px 0 0">De ${num(u.elegibles)} elegibles${u.elegibles>u.enviados?` (${num(u.elegibles-u.enviados)} quedan para mañana por el tope diario)`:''}. Tú no tienes que hacer nada.</p>`);
+
+  if(u.ok && hueco>1)
+    return marco('var(--amber)',`⚠️ La última nota es del ${fFecha} — hace ${hueco} días hábiles.`,
+      `<p class="muted" style="margin:6px 0 0">Salió bien, pero después no volvió a correr. Casi siempre es que el sitio se republicó sin la sección programada de <code>netlify.toml</code>, o que Netlify pausó las funciones. Abre la liga de <b>estado</b> para confirmarlo.</p>`);
+
+  if(u.ok)   // corrio y no habia a quien
+    return marco('var(--amber)',`La nota corrió el ${fFecha}, pero no le tocó a nadie.`,
+      `<p class="muted" style="margin:6px 0 0">${esc(explicaCorrida(u.resultado))} Si tu base tiene correos, revisa la liga de <b>estado</b>: ahí se ve el conteo real.</p>`);
+
+  return marco('var(--red)',`🔴 La nota NO salió el ${fFecha}.`,
+    `<p style="margin:6px 0 0">${esc(explicaCorrida(u.resultado))}</p>
+     ${rachaMala>1?`<p class="muted" style="margin:6px 0 0">Van ${rachaMala} corridas seguidas fallando.</p>`:''}
+     <p class="muted" style="margin:6px 0 0">Debió llegarte un correo con el detalle y el paso a seguir. Si no llegó, es señal de que el correo saliente es justo lo que está roto.</p>`);
 }
 
 /* ---------- MI DÍA (buenos días + pasos por temporalidad) ---------- */
@@ -420,7 +672,21 @@ function renderMiDia(){
   const semTxt=PD.faltan===0?'🏆 Meta de clientes cubierta — cuida la recurrencia':PD.ritmo>=.9?'✅ A este ritmo llegas a la meta':PD.ritmo>=.6?'⚠️ Vas abajo del ritmo — sube los toques de hoy':'🔴 Muy abajo del ritmo — hoy es día de llamadas';
   const item=(p,extra)=>`<div class="list-item" data-client="${p.id}" style="cursor:pointer"><div><strong>${p.potencial==='alto'?'⭐ ':''}${esc(p.empresa)}</strong><div class="meta">${esc(p.contacto||'—')}${p.telefono?' · '+esc(p.telefono):''}</div></div><div style="text-align:right"><div class="midia-step">${esc(nextStep(p).accion)}</div><div class="meta">${extra||''}</div></div></div>`;
   const sec=(icon,title,arr,extraFn)=>`<div class="panel"><h3>${icon} ${title} <span class="muted">${arr.length}</span></h3><div class="list">${arr.length?arr.slice(0,12).map(p=>item(p,extraFn?extraFn(p):'')).join(''):empty('Nada por ahora.')}</div>${arr.length>12?`<div class="muted" style="margin-top:8px;font-size:12px">+${arr.length-12} más · velos en Clientes/Pipeline</div>`:''}</div>`;
-  $('#view-midia').innerHTML=`
+  // Si la base trae contactos heredados del banco, se dice AQUI, que es la
+  // primera pantalla. Un dato malo en la lista de llamadas quema la llamada, y
+  // ella no tiene por que ir a buscarlo a Ajustes.
+  const _her=contactosHeredados();
+  const _herN=_her.reduce((a,[,arr])=>a+arr.length,0);
+  const avisoHeredados=_herN?`<div class="panel alerta-datos">
+    <h3>⚠️ Hay ${_herN} fichas con el contacto equivocado</h3>
+    <p style="margin:-6px 0 12px">${_her.length} nombre(s) aparecen en ${HEREDADO_MIN} o más empresas distintas
+      —por ejemplo <b>${esc(_her[0][0])}</b>, en ${_her[0][1].length}—. Nadie es el contacto de tantas empresas sin
+      relación: son <b>ejecutivos del banco</b> que la importación vieja pegó como si fueran del cliente.
+      Llamar diciendo ese nombre mata la llamada en tres segundos.</p>
+    <button class="primary-btn" id="fix-heredados">🧹 Limpiar los ${_herN} contactos equivocados</button>
+    <span class="muted" style="margin-left:10px;font-size:12px">Solo vacía el contacto. No toca empresa, teléfono, etapa ni actividades.</span>
+  </div>`:'';
+  $('#view-midia').innerHTML=avisoHeredados+panelAutomatizacion()+`
     <div class="midia-hero"><div><h2>${saludo}, ${esc(nombre)} 👋</h2><p class="muted">${fechaLarga()}</p></div>
       <div class="midia-kpis"><div class="${vencidas.length?'mk-red':''}"><b>${vencidas.length}</b><span>vencidas</span></div><div class="${hoy.length?'mk-amber':''}"><b>${hoy.length}</b><span>para hoy</span></div><div class="mk-gold"><b>${superPend.length}</b><span>⭐ por contactar</span></div></div></div>
     <div class="panel plan-panel"><h3>🎯 Plan de cierre <span class="muted">la meta de la casa, viva</span></h3>
@@ -445,6 +711,7 @@ function renderMiDia(){
       <p class="muted" style="margin-top:-6px">Un botón trae el mercado y arma tus mensajes por industria, listos para WhatsApp.</p>
       <div style="display:flex;gap:10px;flex-wrap:wrap">
         <button class="primary-btn big-btn" id="md-noticias">📰 Generar mis noticias de hoy</button>
+        <button class="ghost-btn big-btn" id="md-mancuerna">📞 Armar la lista de llamadas de hoy</button>
         <button class="ghost-btn big-btn" id="md-reporte">📤 Mandar mi reporte del día</button>
       </div>
       <div id="md-noticias-out"></div>
@@ -452,7 +719,7 @@ function renderMiDia(){
     <div class="panel"><h3>☀️ Rutina de la mañana</h3><div class="list">
       <div class="list-item"><span>1. Genera y envía la <b>nota de apertura</b> por industria <span class="muted">(Notas de mercado → 🔄 En vivo)</span></span></div>
       <div class="list-item"><span>2. Resuelve <b>vencidas y de hoy</b> (abajo) 📞</span></div>
-      <div class="list-item"><span>3. Haz <b>${PD.toqDia} toques</b> nuevos (empieza por 🔥 los que ya operaban, luego ⭐)</span></div>
+      <div class="list-item"><span>3. Manda la <b>lista de llamadas</b> de hoy <span class="muted">(Mancuerna → ${PD.toqDia} mejores, ya ordenadas)</span></span></div>
       <div class="list-item"><span>4. Agenda la <b>próxima acción</b> de cada cliente que toques</span></div>
     </div></div>
     ${sec('🔴','Vencidas — actúa ya',vencidas,p=>{const d=daysFromToday(p.fechaProxima);return `vencida ${-d}d`;})}
@@ -464,9 +731,13 @@ function renderMiDia(){
   bindRowClicks();
   $('#md-noticias').onclick=generarNoticiasDia;
   $('#md-reporte').onclick=mandarReporte;
+  // La cuota del plan manda: la lista del dia sale del mismo numero de toques.
+  $('#md-mancuerna').onclick=()=>{ ui.mancN=PD.toqDia; ui.view='mancuerna'; render(); };
   [['plan-meta','metaMes'],['plan-prom','ingresoProm'],['plan-hor','horizonte']].forEach(([id,k])=>{
+    void 0;
     $('#'+id).onchange=e=>{ const v=+e.target.value; if(v>0){ planCfg()[k]=v; save(); const open=$('#view-midia .plan-cfg').open; render(); const dt=$('#view-midia .plan-cfg'); if(dt)dt.open=open; } };
   });
+  { const fb=$('#fix-heredados'); if(fb) fb.onclick=limpiarHeredados; }
 }
 async function generarNoticiasDia(){
   const btn=$('#md-noticias'), out=$('#md-noticias-out');
@@ -567,12 +838,29 @@ function renderPipeline(target){
     const shown=arr.slice(0,KANBAN_CAP);
     const moreNote=arr.length>KANBAN_CAP?`<div class="muted" style="padding:10px;font-size:11px;text-align:center;border-top:1px solid var(--line)">+${arr.length-KANBAN_CAP} más · velos en <b>Clientes</b></div>`:'';
     return `<div class="kcol" data-stage="${s}"><div class="kcol-head"><span style="color:${STAGE_COLOR[s]}">${s}</span><span class="cnt">${arr.length}</span></div><div class="kcol-sum">${fmtUSD(sum)}</div><div class="kcol-body">${shown.map(card).join('')}${moreNote}</div></div>`;}).join('');
-  const legend=`<div class="pipe-legend"><span class="muted">Actividad:</span><span><i class="ld ok"></i> agendada</span><span><i class="ld today"></i> hoy</span><span><i class="ld overdue"></i> vencida</span><span><i class="ld none"></i> sin actividad</span></div>`;
+  // Barra de lineas: el mismo rango de accion que se entrego en la lista de
+  // llamadas, ahora como corte del tablero. Cada linea muestra su nocional
+  // abierto, que es la pregunta que de verdad importa: cuanto hay vivo de FX,
+  // cuanto de tasas y cuanto de commodities.
+  const abiertos=scopeList().filter(p=>OPEN_STAGES.includes(p.etapa));
+  const barra=`<div class="pipe-lineas">
+    <button class="lin-pill ${ui.filtroLinea?'':'on'}" data-linea="">Todas <b>${abiertos.length}</b></button>
+    ${Object.keys(LINEAS).map(k=>{
+      const arr=abiertos.filter(p=>accionVigente(p).linea===k);
+      const noc=arr.reduce((s,p)=>s+accionVigente(p).nocional,0);
+      return `<button class="lin-pill ${ui.filtroLinea===k?'on':''}" data-linea="${k}" title="Nocional abierto en ${esc(LINEAS[k].label)}">
+        ${LINEAS[k].icon} ${LINEAS[k].corto} <b>${arr.length}</b><span>${fmtUSD(noc)}</span></button>`;
+    }).join('')}
+  </div>`;
+  const legend=barra+`<div class="pipe-legend"><span class="muted">Actividad:</span><span><i class="ld ok"></i> agendada</span><span><i class="ld today"></i> hoy</span><span><i class="ld overdue"></i> vencida</span><span><i class="ld none"></i> sin actividad</span><span class="muted" style="margin-left:auto">Chip = línea · rango entregado en la lista de llamadas</span></div>`;
   // Se enlaza SOLO dentro del contenedor: Clientes y Tarjetas tienen cada quien su
   // kanban, y un enlace global le pega otro listener a las tarjetas de la vista
   // oculta en cada render (un arrastre acabaria abriendo el dialogo varias veces).
   const cont=$(target||'#view-pipeline');
   cont.innerHTML=legend+`<div class="kanban">${cols}</div>`;
+  Array.from(cont.querySelectorAll('[data-linea]')).forEach(b=>b.onclick=()=>{
+    ui.filtroLinea=b.dataset.linea; render();
+  });
   bindKanban(cont);
 }
 function actStatus(p){ if(!OPEN_STAGES.includes(p.etapa))return 'none'; const d=daysFromToday(p.fechaProxima); if(d==null)return 'none'; if(d<0)return 'overdue'; if(d===0)return 'today'; return 'ok'; }
@@ -586,6 +874,7 @@ function card(p){
       <h4>${p.potencial==='alto'?'⭐ ':''}${esc(p.empresa)}</h4>
       <div class="c-contact">${esc(p.contacto||'—')}${p.puesto?' · '+esc(p.puesto):''}</div>
       <div class="c-row"><span class="c-rev">${fmtUSD(revenueOf(p))}</span><span class="c-dot act-${st}" title="${esc(nextTxt)}">${ico}</span></div>
+      <div class="c-accion">${chipAccion(p,{corto:true})}</div>
       <div class="c-foot"><span class="seg-tag">${esc(p.segmento||'—')}</span><span class="c-next">${esc(nextTxt)}</span></div>
     </div>
   </div>`;
@@ -618,11 +907,12 @@ function renderClientes(target){
   // necesita es encontrar a alguien por nombre. Las dos colas donde el orden ES
   // el mensaje (a quien llamar primero) ya vienen rankeadas desde filtered() y
   // NO se re-ordenan — antes este sort las pisaba y deshacia la cola.
-  const rankeado=ui.filtroDatos==='operaba'||ui.filtroDatos==='porverif';
+  const rankeado=['operaba','porverif','score'].includes(ui.filtroDatos);
   const arr=rankeado?filtered():filtered().slice().sort(porNombre);
   const rows=arr.map(p=>`<tr data-client="${p.id}" style="cursor:pointer">
     <td><strong>${p.potencial==='alto'?'⭐ ':''}${esc(p.empresa)}</strong><div class="meta">${esc(p.contacto||'—')}${p.puesto?' · '+esc(p.puesto):''}</div></td>
-    <td>${compBadge(p)}</td>
+    <td>${compBadge(p)}${(()=>{const sc=scoreCierre(p);return sc?` <span class="score-pill" style="color:${scoreColor(sc)};border-color:${scoreColor(sc)}" title="Probabilidad de cierre: ${razonesCierre(p).join(' · ')}">${sc}</span>`:'';})()}</td>
+    <td>${chipAccion(p,{corto:true})}</td>
     <td><span class="tag">${esc(p.segmento||'—')}</span></td>
     <td><span class="badge" style="background:${STAGE_COLOR[p.etapa]}22;color:${STAGE_COLOR[p.etapa]}">${esc(p.etapa)}</span></td>
     <td>${p.telefono?'📞':''}${p.email?'✉️':''}${!p.telefono&&!p.email?'<span class="muted">—</span>':''}</td>
@@ -634,16 +924,22 @@ function renderClientes(target){
   const cont=$(target||'#view-clientes');
   cont.innerHTML=`
     <div class="filters">
-      <select id="f-datos"><option value="">Todos (datos)</option><option value="potencial" ${ui.filtroDatos==='potencial'?'selected':''}>⭐ Super potenciales</option><option value="operaba" ${ui.filtroDatos==='operaba'?'selected':''}>🔥 Ya operaban (reactivar)</option><option value="porverif" ${ui.filtroDatos==='porverif'?'selected':''}>📞 Por verificar (cola de llamadas)</option><option value="verificados" ${ui.filtroDatos==='verificados'?'selected':''}>✓ Ya verificados</option><option value="con" ${ui.filtroDatos==='con'?'selected':''}>Con datos de contacto</option><option value="email" ${ui.filtroDatos==='email'?'selected':''}>Con correo</option><option value="tel" ${ui.filtroDatos==='tel'?'selected':''}>Con teléfono</option><option value="sin" ${ui.filtroDatos==='sin'?'selected':''}>Solo nombre</option></select>
+      <select id="f-datos"><option value="">Todos (datos)</option><option value="score" ${ui.filtroDatos==='score'?'selected':''}>🎯 Mejor probabilidad de cierre</option><option value="potencial" ${ui.filtroDatos==='potencial'?'selected':''}>⭐ Super potenciales</option><option value="operaba" ${ui.filtroDatos==='operaba'?'selected':''}>🔥 Ya operaban (reactivar)</option><option value="porverif" ${ui.filtroDatos==='porverif'?'selected':''}>📞 Por verificar (cola de llamadas)</option><option value="verificados" ${ui.filtroDatos==='verificados'?'selected':''}>✓ Ya verificados</option><option value="con" ${ui.filtroDatos==='con'?'selected':''}>Con datos de contacto</option><option value="email" ${ui.filtroDatos==='email'?'selected':''}>Con correo</option><option value="tel" ${ui.filtroDatos==='tel'?'selected':''}>Con teléfono</option><option value="sin" ${ui.filtroDatos==='sin'?'selected':''}>Solo nombre</option></select>
       <select id="f-seg"><option value="">Todas las industrias</option>${segNames().map(s=>`<option ${ui.filtroSeg===s?'selected':''}>${s}</option>`).join('')}</select>
       <select id="f-etapa"><option value="">Todas las etapas</option>${STAGES.map(s=>`<option ${ui.filtroEtapa===s?'selected':''}>${s}</option>`).join('')}</select>
+      <select id="f-linea"><option value="">Todas las líneas</option>${Object.keys(LINEAS).map(k=>`<option value="${k}" ${ui.filtroLinea===k?'selected':''}>${LINEAS[k].icon} ${LINEAS[k].label} (${base.filter(p=>accionVigente(p).linea===k).length})</option>`).join('')}</select>
+      <select id="f-rango"><option value="">Todos los rangos</option>${RANGOS.map(r=>`<option value="${r.k}" ${ui.filtroRango===r.k?'selected':''}>Rango ${r.k} · ${r.label} (${base.filter(p=>accionVigente(p).rango===r.k).length})</option>`).join('')}</select>
       <span class="muted">${arr.length} de ${base.length} · ⭐ ${superN} super · ${conDatos} con datos · ${sinDatos} solo nombre</span>
     </div>
+    ${avisoBusqueda()}
     <div class="panel" style="padding:14px 16px"><h3 style="margin-bottom:10px">Segmentación por industria</h3><div class="funnel">${segs.length?segs.map(({s,n})=>{const max=Math.max(...segs.map(x=>x.n));return `<div class="funnel-row"><span>${s}</span><div class="funnel-bar" style="width:${Math.max(5,n/max*100)}%">${n}</div><span class="muted" style="text-align:right">${n}</span></div>`}).join(''):empty('Sin datos')}</div></div>
-    <div class="table-wrap"><table><thead><tr><th>Empresa / Contacto</th><th>Datos</th><th>Industria</th><th>Etapa</th><th>Medios</th><th style="text-align:right">Ingreso est.</th><th></th></tr></thead><tbody>${rows||`<tr><td colspan="7">${empty('Sin clientes que coincidan.')}</td></tr>`}</tbody></table></div>`;
+    <div class="table-wrap"><table><thead><tr><th>Empresa / Contacto</th><th>Datos</th><th>Cobertura</th><th>Industria</th><th>Etapa</th><th>Medios</th><th style="text-align:right">Ingreso est.</th><th></th></tr></thead><tbody>${rows||`<tr><td colspan="8">${empty('Sin clientes que coincidan.')}</td></tr>`}</tbody></table></div>`;
   cont.querySelector('#f-datos').onchange=e=>{ui.filtroDatos=e.target.value;render();};
   cont.querySelector('#f-seg').onchange=e=>{ui.filtroSeg=e.target.value;render();};
   cont.querySelector('#f-etapa').onchange=e=>{ui.filtroEtapa=e.target.value;render();};
+  bindLimpiarBusqueda();
+  cont.querySelector('#f-linea').onchange=e=>{ui.filtroLinea=e.target.value;render();};
+  cont.querySelector('#f-rango').onchange=e=>{ui.filtroRango=e.target.value;render();};
   bindRowClicks();
 }
 
@@ -695,7 +991,9 @@ function bloqueVerif(p){
   const fecha=(p.verif&&p.verif.fecha)?` <span class="muted">· ${p.verif.fecha}</span>`:'';
   return `<div class="verif-box">
     <div class="verif-head"><span class="verif-badge" style="color:${color};border-color:${color}">${txt}</span>${fecha}</div>
-    <div class="verif-q">Al llamar, pregunta por <b>${esc(p.contacto||'quien lleva tesorería')}</b>. ¿Qué te dijeron?</div>
+    <div class="verif-q">${lecturaDudosa(p)
+      ? `⚠️ El nombre <b>no se leyó bien</b> de la tarjeta. <b>No preguntes por él</b>: di «¿con quién me comunico para el tema de tipo de cambio?» y captura el nombre real aquí.`
+      : `Al llamar, pregunta por <b>${esc(p.contacto||'quien lleva tesorería')}</b>. ¿Qué te dijeron?`}</div>
     <div class="verif-btns">
       <button class="verif-b ok"     data-verif="ok">✓ Sigue ahí</button>
       <button class="verif-b cambio" data-verif="cambio">↻ Es otra persona</button>
@@ -722,7 +1020,11 @@ function openClient(id){
       <div class="drawer-row"><span class="muted">Próxima acción</span><span>${esc(p.proximaAccion||'—')} ${p.fechaProxima?`<span class="tag">${p.fechaProxima}</span>`:''}</span></div>
       ${p.operacion?`<div class="drawer-note" style="border-color:#86e0a5;background:#e7f6ec;color:var(--text)"><b>💰 Operación ganada</b><br>${esc(p.operacion.producto||'Operación')} · Vol ${fmtUSD(p.operacion.volumen)} · Nivel ${esc(p.operacion.nivel||'—')} · <b style="color:var(--green)">Ganancia ${fmtUSD(p.operacion.ganancia)}</b> · ${esc(p.operacion.fecha||'')}</div>`:''}
       ${p.notas?`<div class="drawer-note">${esc(p.notas)}</div>`:''}
-      ${p.esTarjeta?`<div class="drawer-note" style="border-color:var(--accent);background:var(--accent-soft);color:var(--text)"><b>📇 Está en Tarjetas</b><br>Aún no cuenta en tu pipeline ni en tus métricas. <button class="btn-sm" id="drawer-pass" style="margin-top:8px">✓ Pasar a Clientes</button></div>`:''}
+      ${lecturaDudosa(p)?`<div class="drawer-note" style="border-color:var(--gold);background:#fffbeb;color:#78350f">
+      <b>⚠️ El nombre no se pudo leer bien</b><br>Al escanear esta tarjeta el nombre quedó tapado o ilegible, así que
+      <b>lo que dice arriba no es de fiar</b>. Por eso esta ficha no entra a la lista de llamadas.
+      Corrige el nombre con ✎ Editar y vuelve a entrar sola.</div>`:''}
+    ${p.esTarjeta?`<div class="drawer-note" style="border-color:var(--accent);background:var(--accent-soft);color:var(--text)"><b>📇 Está en Tarjetas</b><br>Aún no cuenta en tu pipeline ni en tus métricas. <button class="btn-sm" id="drawer-pass" style="margin-top:8px">✓ Pasar a Clientes</button></div>`:''}
       <div class="drawer-actions"><button class="primary-btn" id="drawer-act">+ Actividad</button><button class="ghost-btn" id="drawer-sched">📅 Agendar</button><button class="ghost-btn" id="drawer-cot">≣ Cotizar</button><button class="ghost-btn" id="drawer-edit">✎ Editar</button><button class="ghost-btn danger" id="drawer-del">🗑</button></div>
       <h3 class="drawer-h3">Línea de tiempo</h3>
       <div class="timeline">${acts.length?acts.map(a=>`<div class="tl-item"><div class="tl-dot"></div><div><strong>${esc(a.tipo)}</strong> <span class="muted">${a.fecha||''}</span><div>${esc(a.nota||'')}</div></div></div>`).join(''):'<div class="muted" style="padding:8px">Sin actividades aún.</div>'}${hist.map(h=>`<div class="tl-item"><div class="tl-dot alt"></div><div><span class="muted">${h.fecha}</span> movido a <strong>${esc(h.a)}</strong></div></div>`).join('')}</div>
@@ -1365,6 +1667,623 @@ function submitMove(e){
   toast(`${p.empresa} → ${d.etapa} ✓`+(d.genreunion==='on'?' · cita .ics':''));
 }
 
+/* ---------- LEADS: los que llegaron solos ----------------------------------
+   Vienen de calculadora.html, la pagina publica. Es la unica entrada que NO
+   requiere que nadie levante el telefono, asi que son los contactos mas
+   valiosos que hay: ya saben cuanto estan pagando de mas y aun asi pidieron
+   que los buscaran.
+
+   Viven en su propia tabla de Supabase (no en la cartera de nadie) hasta que
+   alguien los pasa a Clientes. Solo existen en modo nube; en demo la seccion
+   avisa en vez de fallar.
+---------------------------------------------------------------------------- */
+async function cargarLeads(silencioso){
+  if (!DB.cloud) { ui.leads=[]; ui.leadsErr='demo'; return; }
+  try { ui.leads = await DB.leads(); ui.leadsErr=null; }
+  catch(e){ ui.leadsErr = errMsg(e); if(!silencioso) toast('No se pudieron traer los leads'); }
+}
+function leadsPend(){ return (ui.leads||[]).filter(l=>!l.atendido).length; }
+
+/* El lead ya viene clasificado por la calculadora o por el bot: linea de
+   cobertura y rango de accion vienen en la fila. Si no (leads viejos, de antes
+   del cambio), se reconstruye con lo que haya. */
+function accionLead(l){
+  const linea=LINEAS[l.linea]?l.linea:'fx';
+  const anual=Number(l.exposicion_anual)||(Number(l.monto_usd)||0)*12;
+  const r=RANGOS.find(x=>x.k===l.rango)||rangoPorNocional(anual);
+  return {linea, L:LINEAS[linea], rango:r.k, r, instrumento:INSTRUMENTO[linea][r.k],
+          nocional:anual, fee:Math.round(anual*LINEAS[linea].bps/10000)};
+}
+// Se abre con SU cifra — pero la cifra que importa ya no es el ahorro de
+// spread, sino lo que tiene expuesto. El spread queda como prueba de que
+// nadie esta viendo el tema.
+function ganchoLead(l){
+  const a=accionLead(l), ah=Number(l.ahorro_anual)||0;
+  const base=a.nocional
+    ? `${a.L.icon} ${a.L.label} · Rango ${a.rango} — ${fmtUSD(a.nocional)} expuestos al año.`
+    : `${a.L.icon} ${a.L.label} — llegó solo, falta dimensionar.`;
+  return ah?`${base} Además calculó ${money(ah,'MXN')} al año perdidos en spread.`:base;
+}
+function textoLead(l){
+  const nom=(l.contacto||'').split(' ')[0], a=accionLead(l);
+  const ah=Number(l.ahorro_anual)||0;
+  return [
+    `Buen día${nom?', '+nom:''}. Le escribe ${userName(ME.email).split(' ')[0]}, de ${brand()}.`,
+    `Vi que usó nuestra calculadora${l.empresa?' para '+l.empresa:''}.`,
+    ah?`El ahorro de spread le salió en ${money(ah,'MXN')} al año, y eso ya es dinero. Pero normalmente lo grande está en otro lado: si su exposición se mueve en contra, el golpe es de otro tamaño.`:'',
+    ``,
+    a.nocional
+      ? `Con lo que capturó, lo que trae sentido revisar es ${a.instrumento.toLowerCase()}.`
+      : `Lo primero sería dimensionar cuánto mueven al año.`,
+    ``,
+    `¿Le parece si lo vemos 15 minutos y le doy el número de su caso? Sin costo y sin compromiso.`,
+  ].filter(Boolean).join('\n');
+}
+
+function renderLeads(){
+  const cont=$('#view-leads');
+  if(ui.leadsErr==='demo'){
+    cont.innerHTML=`<div class="panel">${empty('Los leads de la página pública llegan por la nube. Esta sesión está en modo local (demo), así que no hay nada que mostrar aquí.')}</div>`;
+    return;
+  }
+  const q=(ui.search||'').toLowerCase().trim();
+  const arr=(ui.leads||[]).filter(l=>coincideBusqueda(l,q));
+  const pend=arr.filter(l=>!l.atendido), hechos=arr.filter(l=>l.atendido);
+
+  const ficha=l=>{
+    const tel=(l.telefono||'').replace(/\D/g,'');
+    const wa=tel?(tel.length===10?'52'+tel:tel):'';
+    const cuando=(l.creado||'').slice(0,16).replace('T',' ');
+    const monto=Number(l.monto_usd)||0, al=accionLead(l);
+    return `<div class="lead-card${l.atendido?' lead-done':''}">
+      <div class="lead-top">
+        <div>
+          <strong>${esc(l.empresa||l.contacto||l.email||'Sin nombre')}</strong>
+          <div class="meta">${esc(l.contacto||'—')}${l.email?' · '+esc(l.email):''}${l.telefono?' · '+esc(l.telefono):''}</div>
+        </div>
+        <span class="meta" style="white-space:nowrap">${esc(cuando)}</span>
+      </div>
+      <div class="lead-nums">
+        <span class="acc-chip asignado" style="--acc:${al.r.color}" title="${esc(al.instrumento)}">${al.L.icon} ${al.L.corto} · Rango ${al.rango}</span>
+        ${al.nocional?`<span><b>${fmtUSD(al.nocional)}</b> expuestos al año</span>`:''}
+        ${monto?`<span><b>${fmtUSD(monto)}</b> al mes</span>`:''}
+        ${l.spread_banco?`<span>paga <b>${esc(l.spread_banco)}¢</b> de spread</span>`:''}
+        ${al.fee?`<span class="lead-hot"><b>${fmtUSD(al.fee)}</b> de comisión al año</span>`:''}
+      </div>
+      <div class="lead-why">${esc(ganchoLead(l))}</div>
+      <div class="lead-acts">
+        ${tel?`<a class="btn-sm" href="tel:${tel}">📞 Llamar</a>`:''}
+        ${wa?`<a class="btn-sm" target="_blank" href="https://wa.me/${wa}?text=${encodeURIComponent(textoLead(l))}">💬 WhatsApp</a>`:''}
+        ${l.email?`<a class="btn-sm" href="mailto:${esc(l.email)}?subject=${encodeURIComponent(brand()+' — su cálculo de tipo de cambio')}&body=${encodeURIComponent(textoLead(l))}">✉ Correo</a>`:''}
+        <button class="btn-sm" data-lead-alta="${l.id}">➕ Pasar a Clientes</button>
+        <button class="btn-sm" data-lead-ok="${l.id}" data-val="${l.atendido?'0':'1'}">${l.atendido?'↩ Reabrir':'✓ Atendido'}</button>
+      </div>
+    </div>`;
+  };
+
+  cont.innerHTML=`
+    <div class="panel">
+      <h3>⚡ Sin atender <span class="muted">${pend.length}</span></h3>
+      ${avisoBusqueda()}
+      <p class="muted" style="margin:-8px 0 14px">Llegaron solos por la página pública. Llámales el mismo día: el interés se enfría en horas, no en semanas.</p>
+      ${ui.leadsErr&&ui.leadsErr!=='demo'?`<div class="msg-err">No se pudieron traer: ${esc(ui.leadsErr)}</div>`:''}
+      <div class="lead-list">${pend.length?pend.map(ficha).join(''):empty('Nadie nuevo por ahora. Comparte la liga de la calculadora para que empiecen a caer.')}</div>
+      <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
+        <button class="ghost-btn" id="leads-recargar">🔄 Actualizar</button>
+        <button class="ghost-btn" id="leads-liga">🔗 Copiar la liga de la calculadora</button>
+      </div>
+    </div>
+    ${hechos.length?`<div class="panel"><h3>✓ Ya atendidos <span class="muted">${hechos.length}</span></h3>
+      <div class="lead-list">${hechos.slice(0,30).map(ficha).join('')}</div></div>`:''}`;
+
+  bindLimpiarBusqueda();
+  $('#leads-recargar').onclick=async()=>{ await cargarLeads(); render(); toast('Actualizado ✓'); };
+  $('#leads-liga').onclick=()=>copy(location.origin+location.pathname.replace(/[^/]*$/,'')+'calculadora.html');
+  $$('[data-lead-ok]').forEach(b=>b.onclick=async()=>{
+    b.disabled=true;
+    try{ await DB.marcarLead(b.dataset.leadOk, b.dataset.val==='1'); await cargarLeads(true); render(); }
+    catch(e){ b.disabled=false; toast('No se pudo guardar'); }
+  });
+  $$('[data-lead-alta]').forEach(b=>b.onclick=()=>altaDesdeLead(b.dataset.leadAlta));
+}
+
+// Pasa el lead a la cartera con lo que ya sabemos de el: etapa "Contactado"
+// porque el primer movimiento lo hizo la persona, no nosotros.
+function altaDesdeLead(id){
+  const l=(ui.leads||[]).find(x=>String(x.id)===String(id)); if(!l) return;
+  const monto=Number(l.monto_usd)||0, a=accionLead(l);
+  const p={
+    id:uid(), empresa:l.empresa||l.contacto||l.email||'Lead', contacto:l.contacto||'',
+    puesto:'', telefono:l.telefono||'', email:l.email||'',
+    fuente:'Inbound (web)', segmento:(state.industries[0]||{}).name||'', etapa:'Contactado',
+    productos:[], notional:a.nocional, feeBps:a.L.bps, probabilidad:25,
+    // Llega ya clasificado: el lead trae su linea y su rango desde la
+    // calculadora o el bot, asi que aparece en el pipeline con el mismo chip
+    // que los que salen de la lista de llamadas.
+    accion:{linea:a.linea, rango:a.rango, instrumento:a.instrumento, objetivo:a.r.objetivo,
+            nocional:a.nocional, etapaMeta:a.r.etapa, fecha:todayISO()},
+    proximaAccion:a.r.objetivo, fechaProxima:todayISO(),
+    notas:[`Origen: ${l.origen||'calculadora'} (${(l.creado||'').slice(0,10)})`,
+           `Línea: ${a.L.label} · Rango ${a.rango} — ${a.instrumento}`,
+           a.nocional?`Exposición anual: ${fmtUSD(a.nocional)}`:'',
+           monto?`Declaró USD ${num(monto)} al mes`:'',
+           l.spread_banco?`Dijo pagar ${l.spread_banco} centavos de spread`:'',
+           l.ahorro_anual?`Ahorro de spread estimado: ${money(Number(l.ahorro_anual),'MXN')}`:'',
+           l.notas||''].filter(Boolean).join('\n'),
+    creado:todayISO(), actualizado:todayISO(),
+    actividades:[{id:uid(),fecha:todayISO(),tipo:'Inbound',nota:'Llenó la calculadora del sitio y pidió que lo contactaran.'}],
+    stageHistory:[],
+  };
+  state.prospects.unshift(p);
+  save();
+  DB.marcarLead(l.id,true).then(()=>cargarLeads(true)).catch(()=>{});
+  l.atendido=true;
+  render(); toast('Agregado a Clientes ✓');
+  openClient(p.id);
+}
+
+/* ---------- MANCUERNA: trabajo listo para quien NO abre el CRM --------------
+   Realidad de esta mesa: quien tiene la relacion, la licencia y el telefono de
+   los 2,144 no usa la herramienta y no la va a usar. Entonces la herramienta no
+   puede pedirle NADA: tiene que escupirle trabajo terminado.
+
+   El flujo es de dos personas (por eso "mancuerna", como el .xls de 2008):
+     1. Aqui se arma la lista de llamadas del dia, ordenada por probabilidad
+        real de cierre — no alfabetica, no por fecha.
+     2. Sale por WhatsApp como UN solo mensaje: numero tapeable, por que a ese
+        y la frase exacta de apertura. El operador solo marca.
+     3. El resultado vuelve por voz ("de los 10, tres siguen") y se captura
+        aqui en un boton, con el mismo flujo de verificacion que ya existia.
+
+   Nada de esto requiere que el operador instale, entre o aprenda algo.
+---------------------------------------------------------------------------- */
+
+/* Score 0-100: probabilidad de que ESTA ficha se convierta en dinero.
+   Los pesos no son opinion — son el orden que el propio PLAN_DE_CIERRE ya
+   habia identificado: cobertura previa >> cliente activo previo >> datos
+   completos. Lo unico que agrega el score es poder mezclar las señales y
+   ordenar las 2,144 de un jalon en vez de filtrarlas de una en una. */
+const SCORE_PESOS = [
+  {pts:34, test:p=>operabaScore(p)===2,                          txt:'🔥 Ya tenía cobertura'},
+  {pts:20, test:p=>operabaScore(p)===1,                          txt:'Fue cliente activo'},
+  // El tamaño de la exposicion es lo que separa un programa de una operacion
+  // suelta, asi que pesa casi tanto como haber sido cliente. Antes no entraba
+  // en el score y por eso la lista mezclaba corporativos con changarros.
+  {pts:26, test:p=>accionDe(p).rango==='A',                      txt:'💰 Exposición de programa'},
+  {pts:18, test:p=>accionDe(p).rango==='B',                      txt:'Exposición estructurable'},
+  {pts:8,  test:p=>accionDe(p).rango==='C',                      txt:'Da para un primer forward'},
+  {pts:16, test:p=>!!p.telefono,                                 txt:'Con teléfono'},
+  {pts:10, test:p=>['ok','cambio'].includes(verifEstado(p)),     txt:'✓ Contacto verificado'},
+  {pts:8,  test:p=>!!p.contacto,                                 txt:'Contacto con nombre'},
+  {pts:6,  test:p=>p.potencial==='alto',                         txt:'⭐ Super potencial'},
+  {pts:4,  test:p=>!!p.email,                                    txt:'Con correo'},
+];
+// 34+26+16+10+8+6+4: dentro de cada grupo los pesos son excluyentes (los dos
+// primeros salen de operabaScore; los tres de rango, del nocional).
+const SCORE_MAX = 104;
+function scoreCierre(p){
+  if(!p || verifEstado(p)==='nolocal') return 0;   // ya se comprobo que no hay a quien llamar
+  let raw=0; for(const f of SCORE_PESOS) if(f.test(p)) raw+=f.pts;
+  return Math.min(100, Math.round(raw/SCORE_MAX*100));
+}
+function razonesCierre(p){
+  if(verifEstado(p)==='nolocal') return ['✗ No localizable'];
+  return SCORE_PESOS.filter(f=>f.test(p)).map(f=>f.txt);
+}
+function scoreIcono(sc){ return sc>=70?'🔥':sc>=45?'⭐':'•'; }
+function scoreColor(sc){ return sc>=70?'var(--green)':sc>=45?'var(--accent)':'var(--muted)'; }
+
+/* Telefono: 10 digitos para mostrar, +52 para que WhatsApp lo vuelva tapeable. */
+function telDigits(p){ const r=telA10(p&&p.telefono); return (r.tel||'').replace(/\D/g,''); }
+// Mexico tiene lada de 2 digitos SOLO en CDMX (55/56), Guadalajara (33) y
+// Monterrey (81); el resto del pais es de 3. Partirlo siempre en 2 deja
+// "+52 99 8123 4567" para un numero de Cancun, que se lee mal al marcar.
+const LADA2 = ['55','56','33','81'];
+function telBonito(p){
+  const d=telDigits(p); if(!d) return '';
+  if(d.length!==10) return '+'+d;
+  return LADA2.includes(d.slice(0,2))
+    ? `+52 ${d.slice(0,2)} ${d.slice(2,6)} ${d.slice(6)}`      // 55 1234 5678
+    : `+52 ${d.slice(0,3)} ${d.slice(3,6)} ${d.slice(6)}`;     // 998 123 4567
+}
+
+/* Elegibilidad para la lista del dia. La regla que mas importa es la ultima:
+   nadie entra dos veces en 14 dias. Sin eso la lista repite a los mismos
+   "mejores" cada mañana y el operador deja de confiar en ella. */
+const MANC_REPESCA = 14;
+function diasDesde(iso){ const d=daysFromToday(iso); return d==null?null:-d; }
+function elegibleMancuerna(p){
+  if(lecturaDudosa(p)) return false;      // el nombre no es de fiar: no se marca
+  if(!telDigits(p)) return false;                                  // sin telefono no hay llamada
+  if(verifEstado(p)==='nolocal') return false;
+  if(WON_STAGES.includes(p.etapa) || p.etapa==='Perdido') return false;
+  const ent=p.mancuerna&&p.mancuerna.fecha;
+  if(ent && diasDesde(ent) < MANC_REPESCA) return false;           // ya se mando hace poco
+  const ult=(p.actividades||[]).map(a=>a.fecha).filter(Boolean).sort().pop();
+  if(ult && diasDesde(ult) < MANC_REPESCA) return false;           // ya se toco hace poco
+  return true;
+}
+/* La cola sale de la cartera. Las TARJETAS escaneadas viven aparte a proposito
+   (son datos sin revisar, leidos por la IA de una foto) y por eso no entran
+   solas — pero son gente que SI se conocio en persona, o sea mas caliente que
+   cualquiera de la base de 2008. Dejarlas fuera para siempre era desperdiciar
+   lo mejor que hay. Por eso se pueden incluir, pero como decision explicita:
+   el interruptor esta apagado por omision. */
+function colaMancuerna(){
+  const q=(ui.search||'').toLowerCase().trim();
+  const base = (ui.mancTarjetas ? cartera().concat(bandeja()) : cartera()).filter(p=>coincideBusqueda(p,q));
+  return base.filter(elegibleMancuerna).map(p=>({p,sc:scoreCierre(p)}))
+    .filter(x=>x.sc>0).sort((a,b)=>(b.sc-a.sc)||porNombre(a.p,b.p));
+}
+function tarjetasLlamables(){ return bandeja().filter(elegibleMancuerna).filter(p=>scoreCierre(p)>0).length; }
+/* Entregado pero sin resultado: la verificacion es anterior al envio (o no hay). */
+function sinResultado(p){
+  const f=p.mancuerna&&p.mancuerna.fecha; if(!f) return false;
+  if(diasDesde(f)>21) return false;                     // ya es historia, no pendiente
+  const v=p.verif&&p.verif.fecha;
+  return !v || v < f;
+}
+function pendientesMancuerna(){
+  const q=(ui.search||'').toLowerCase().trim();
+  return cartera().filter(p=>coincideBusqueda(p,q)).filter(sinResultado)
+    .sort((a,b)=>(a.mancuerna.fecha<b.mancuerna.fecha?1:-1)||(scoreCierre(b)-scoreCierre(a)));
+}
+
+/* ---- El discurso, por linea de cobertura ---------------------------------
+   Esto es lo que cambio de raiz: antes todo abria por el spread ("le cobran 25
+   centavos por dolar"). Ese gancho funciona para que contesten, pero encuadra
+   la conversacion como una compra-venta y ahi el cliente compara precio y se
+   va con quien le de un centavo menos. Abrir por la EXPOSICION encuadra un
+   problema de margen, que es lo que la mesa sabe resolver y lo que deja
+   nocional recurrente. El spread se sigue usando — pero como prueba de que
+   hay dinero mal puesto, no como la oferta.
+-------------------------------------------------------------------------- */
+const DISCURSO = {
+  fx: {
+    quien:'Quién ve el tipo de cambio',
+    dolor:'si el dólar se mueve, se les mueve el margen',
+    pregunta:'¿ya saben cuánto le pega a su margen un movimiento de ocho por ciento, o se enteran cuando cierran el mes?',
+    numero:'Con 200 mil dólares al mes de exposición, un movimiento de ocho por ciento son alrededor de $3.5 millones de pesos de margen. Eso no se arregla negociando centavos: se arregla fijando el tipo de cambio.',
+    prueba:'De paso: casi todas las empresas pagan entre 20 y 30 centavos de spread sin negociarlo. Ese es el síntoma de que nadie está viendo el tema.',
+    objDeja:'"No le pido que deje su banco. El banco le sigue dando su línea. Lo que le propongo es que la cobertura la arme quien la ve todos los días."',
+  },
+  tasas: {
+    quien:'Quién ve la deuda',
+    dolor:'cada movimiento de Banxico les cambia el costo financiero del año',
+    pregunta:'¿su deuda está a tasa fija o siguen expuestos a la variable?',
+    numero:'Sobre 50 millones de pesos a tasa variable, 150 puntos base son $750 mil pesos al año de costo extra. Un IRS lo vuelve un número fijo que se puede presupuestar.',
+    prueba:'La mayoría trae la deuda a TIIE porque así se la dieron, no porque lo hayan decidido.',
+    objDeja:'"No es refinanciar ni mover el crédito. El crédito se queda igual; encima se pone el swap que fija la tasa."',
+  },
+  commod: {
+    quien:'Quién compra el insumo',
+    dolor:'su mayor costo variable se mueve todos los días y nadie lo fija',
+    pregunta:'¿lo compran a precio spot o ya tienen precio cerrado a plazo?',
+    numero:'Si el insumo pesa 5 millones de dólares al año, un alza de doce por ciento son 600 mil dólares que salen del margen. Con un collar a costo cero se le pone techo sin pagar prima.',
+    prueba:'Casi todos presupuestan el insumo al precio del día que armaron el presupuesto, y luego lo absorben.',
+    objDeja:'"No cambia a su proveedor ni su logística. El físico sigue igual; el precio se fija aparte, en papel."',
+  },
+};
+
+/* Por que a este, en una linea (lo que el operador necesita saber antes de marcar) */
+function ganchoDe(p){
+  const a=accionVigente(p), s=operabaScore(p), l=a.L.label.toLowerCase();
+  if(p.esTarjeta) return `📇 Se conocieron en persona — te dio su tarjeta`;
+  if(s===2) return `Ya tenía cobertura — continuidad en ${l}`;
+  if(s===1) return `Fue cliente activo — reactivar por ${l}`;
+  if(a.rango==='A') return `Exposición de programa en ${l} — esto va a comité`;
+  if(p.potencial==='alto') return `Corporativo grande — sembrar por ${l}`;
+  if(a.rango==='D') return `Frío y sin cifra — la llamada es para dimensionar`;
+  return `Frío — abrir por su exposición a ${l}`;
+}
+/* La frase textual de apertura. Va entre comillas a proposito: se lee tal cual. */
+function aperturaDe(p){
+  const emp=p.empresa||'su empresa', s=operabaScore(p), a=accionVigente(p), D=DISCURSO[a.linea];
+  // Con una tarjeta en la mano no se abre en frío: ya hubo un cara a cara, y
+  // recordárselo es el mejor permiso que existe para la llamada.
+  if(p.esTarjeta) return `Nos dio su tarjeta hace poco. Le hablo para darle seguimiento: ${D.pregunta}`;
+  if(s===2) return `${emp} operaba coberturas con nuestra mesa. Hoy la llevo de forma independiente, con los mismos proveedores. ¿Siguen cubriendo su exposición o quedaron descubiertos?`;
+  if(s===1) return `${emp} era cliente de la mesa. Hoy la llevo independiente y lo que trabajo es cobertura, no sólo la operación. ¿Hoy cómo manejan su riesgo de ${a.L.label.toLowerCase()}?`;
+  if(a.rango==='A') return `¿Con quién veo el riesgo de ${a.L.label.toLowerCase()} en ${emp}? Por el tamaño que manejan, lo que trae sentido es una política de cobertura, no una operación suelta. ¿Ya tienen una por escrito?`;
+  return `¿${D.quien} en ${emp}? Le llamo por una sola cosa: ${D.pregunta}`;
+}
+
+/* Secuencia de 3 toques. El problema no es tener el telefono, es que contesten:
+   un solo intento por WhatsApp muere; tres toques distintos en canales distintos
+   es lo que mueve la tasa de respuesta. */
+function secuenciaDe(p){
+  const yo=userName(ME.email).split(' ')[0], marca=brand();
+  const quien=p.contacto||'quien lleve tesorería', emp=p.empresa||'su empresa';
+  const react=operabaScore(p)>0, tarjeta=!!p.esTarjeta;
+  const a=accionVigente(p), D=DISCURSO[a.linea], L=a.L;
+  // Lo que se pide en la cita depende del rango: al de rango A se le pide el
+  // comite, al de rango D solo dimensionar. Pedir de mas cierra la puerta;
+  // pedir de menos deja la reunion sin quien decida.
+  const pedir = a.rango==='A' ? 'una hora con quien decide, para revisar su exposición completa y dejar una política por escrito'
+              : a.rango==='B' ? '30 minutos para revisar su exposición con sus propios números'
+              : a.rango==='C' ? '15 minutos para cotizarle en firme su próxima operación'
+              : '15 minutos para dimensionar cuánto mueven al año y ver si hay algo que cubrir';
+
+  const wa=[
+    `Buen día${p.contacto?', '+p.contacto:''}. Le escribe ${yo}, de ${marca}.`,
+    tarjeta
+      ? `Nos dio su tarjeta hace poco y le quedé de buscar. Trabajo el riesgo de ${L.label.toLowerCase()} de empresas como ${emp}.`
+      : react
+      ? `Le busco porque ${emp} operaba con nuestra mesa. Hoy la llevo de forma independiente, con los mismos proveedores institucionales, y lo que trabajo es cobertura: ${L.label.toLowerCase()}.`
+      : `Le busco porque trabajo el riesgo de ${L.label.toLowerCase()} de empresas como ${emp}. El problema de fondo no es el precio del día: es que ${D.dolor}.`,
+    ``,
+    `${D.pregunta.charAt(0).toUpperCase()+D.pregunta.slice(1)}`,
+    ``,
+    `Si me regala ${pedir}, le muestro con sus propios números cuánto vale ese riesgo al año y dos formas concretas de acotarlo.`,
+    ``,
+    `Si prefiere, le marco. ¿Qué hora le funciona?`,
+  ].join('\n');
+
+  const llamada=[
+    `📞 GUION — ${L.icon} ${L.label.toUpperCase()} · Rango ${a.rango}`,
+    `Alcance de esta llamada: ${a.r.alcance}`,
+    `Lo que se propone: ${a.instrumento}`,
+    ``,
+    `1) "Buenas, ¿me comunica con ${quien}, de tesorería?"`,
+    `2) "${p.contacto?p.contacto:'Qué tal'}, soy ${yo}, de ${marca}."`,
+    `3) GANCHO — ${tarjeta
+        ? `"Nos dio su tarjeta hace poco y le quedé de buscar."`
+        : react
+        ? `"${emp} operaba con nuestra mesa hace tiempo. Hoy la llevo independiente y trabajo cobertura de ${L.label.toLowerCase()}."`
+        : `"Trabajo el riesgo de ${L.label.toLowerCase()} de empresas de su sector."`}`,
+    `4) LA PREGUNTA — "${D.pregunta.charAt(0).toUpperCase()+D.pregunta.slice(1)}"`,
+    `5) EL NÚMERO — "${D.numero}"`,
+    `6) CIERRE — "¿Le parece si nos damos ${pedir}?"`,
+    ``,
+    `SI DICE "NO TENEMOS ESE RIESGO":`,
+    `   "${D.prueba} ¿Me deja hacerle dos preguntas para descartarlo en un minuto?"`,
+    `SI DICE "YA LO VEMOS CON EL BANCO":`,
+    `   ${D.objDeja}`,
+    `SI DICE "MÁNDEME INFORMACIÓN":`,
+    `   "Con gusto, ¿a qué correo? Le mando el diagnóstico de su industria y le marco el jueves, ¿le parece?"`,
+    `SI DICE "NO ME INTERESA":`,
+    `   "Entendido. ¿Le puedo mandar la nota diaria de mercado? Es gratis y así me tiene a la mano el día que su riesgo se mueva."`,
+    ``,
+    `⚠️ NO prometer un nivel, una prima ni una tasa. El número en firme se cotiza con la mesa.`,
+  ].join('\n');
+
+  const asunto=tarjeta
+    ? `Seguimiento — ${emp} y su riesgo de ${L.label.toLowerCase()}`
+    : react
+    ? `${emp} — su cobertura de ${L.label.toLowerCase()}, ahora de forma independiente`
+    : `${emp} — cuánto vale al año su riesgo de ${L.label.toLowerCase()}`;
+
+  const correo=[
+    `${p.contacto?p.contacto+',':'Buen día,'}`,
+    ``,
+    tarjeta
+      ? `Le escribo dando seguimiento a su tarjeta. En ${marca} trabajamos el riesgo de ${L.label.toLowerCase()} con proveedores institucionales (${L.prov}).`
+      : react
+      ? `Le escribo porque ${emp} operaba con nuestra mesa. Hoy llevo esa misma mesa de forma independiente, en ${marca}, con acceso a los mismos proveedores institucionales (${L.prov}).`
+      : `Le escribo porque en ${marca} trabajamos el riesgo de ${L.label.toLowerCase()} de empresas como ${emp}, con proveedores institucionales (${L.prov}).`,
+    ``,
+    `El punto concreto: ${D.dolor}. ${D.numero}`,
+    ``,
+    `Lo que propongo para su caso: ${a.instrumento.toLowerCase()}. ${a.r.alcance}.`,
+    ``,
+    `${D.prueba}`,
+    ``,
+    `No le pido que cambie de banco ni de proveedor. Le pido ${pedir}. Si al ver el número no le hace sentido, no hay nada que hacer.`,
+    ``,
+    `¿Le funciona esta semana?`,
+    ``,
+    `${yo}`,
+    `${marca}`,
+    ``,
+    `Información con fines informativos; no constituye recomendación de inversión. La operación se realiza a través de las entidades autorizadas.`,
+  ].join('\n');
+  return {wa,llamada,correo,asunto};
+}
+
+/* EL ENTREGABLE: un solo mensaje de WhatsApp con la jornada completa.
+   Formato pensado para leerse en un celular mientras se marca: numero visible
+   con +52 para que WhatsApp lo vuelva liga tapeable, y la frase de apertura en
+   cursiva para poder leerla en voz alta sin editar nada. */
+function textoListaHoy(items){
+  // Resumen por linea arriba del todo: quien llama entra sabiendo de que van
+  // las diez llamadas antes de leer la primera. Si la lista trae tres temas
+  // distintos, conviene agrupar mentalmente y no ir saltando.
+  const porLinea={};
+  items.forEach(({p})=>{ const k=accionVigente(p).linea; porLinea[k]=(porLinea[k]||0)+1; });
+  const resumen=Object.keys(porLinea).map(k=>`${LINEAS[k].icon} ${porLinea[k]} de ${LINEAS[k].label.toLowerCase()}`).join(' · ');
+
+  const L=[`📞 *LLAMADAS DE HOY — ${items.length}*`,`🗓️ ${fechaLarga()}`,``,
+    resumen, ``,
+    `Van de mayor a menor probabilidad de cierre. Tapea el número para marcar.`,
+    `El *rango* dice hasta dónde llega esta llamada: A = programa completo, D = sólo dimensionar.`,``];
+  items.forEach(({p,sc},i)=>{
+    const a=accionVigente(p);
+    L.push(`*${i+1}. ${p.esTarjeta?'📇 ':''}${p.empresa}*`);
+    const q=[p.contacto||'Preguntar por tesorería',p.puesto].filter(Boolean).join(' · ');
+    L.push(q);
+    L.push(telBonito(p));
+    L.push(`${scoreIcono(sc)} ${ganchoDe(p)}`);
+    L.push(`${a.L.icon} *${a.L.label} · Rango ${a.rango}* — ${a.instrumento}`);
+    L.push(`🎯 ${a.r.objetivo}`);
+    if(a.nocional) L.push(`💰 Exposición en ficha: ${fmtUSD(a.nocional)} · comisión estimada ${fmtUSD(a.fee)}/año`);
+    L.push(`_"${aperturaDe(p)}"_`);
+    L.push(``);
+  });
+  L.push(`— ${brand()} · dime cómo te fue con cada uno y yo lo registro.`);
+  return L.join('\n');
+}
+
+/* Marca la lista como entregada para que mañana salgan OTROS, y — esto es lo
+   nuevo — ESCRIBE el rango de accion en la ficha. Ese sello es lo que hace que
+   el pipeline muestre linea, rango y nocional sin que nadie capture nada: lo
+   que se prometio en la llamada queda en el tablero. */
+function entregarLista(items){
+  const hoy=todayISO();
+  items.forEach(({p})=>{
+    const a=accionVigente(p);
+    p.mancuerna={fecha:hoy};
+    p.accion={linea:a.linea, rango:a.rango, instrumento:a.instrumento,
+              objetivo:a.r.objetivo, nocional:a.nocional, etapaMeta:a.etapaMeta, fecha:hoy};
+    // La comision de la ficha sigue la linea: tasas se cobra a 10 pb, no a 25.
+    if(!p.feeMonto) p.feeBps=a.L.bps;
+    if(!p.proximaAccion) p.proximaAccion=a.r.objetivo;
+    p.actualizado=hoy;
+  });
+  ui.mancUndo=items.map(x=>x.p.id);
+  save();
+}
+function deshacerEntrega(){
+  (ui.mancUndo||[]).forEach(id=>{ const p=state.prospects.find(x=>x.id===id); if(p){ delete p.mancuerna; delete p.accion; } });
+  ui.mancUndo=null; save(); render(); toast('Entrega deshecha — vuelven a la cola');
+}
+
+function renderMancuerna(){
+  const todaCola=colaMancuerna();
+  // Filtrar por linea sirve para hacer bloques de llamadas del mismo tema: se
+  // encadenan mucho mejor diez llamadas de tasas seguidas que diez saltando
+  // entre dolar, deuda e insumos.
+  const cola=ui.mancLinea?todaCola.filter(x=>accionVigente(x.p).linea===ui.mancLinea):todaCola;
+  const n=Math.min(ui.mancN, cola.length);
+  const hoy=cola.slice(0,n);
+  const pend=pendientesMancuerna();
+  const tel=(state.mancuernaTel||state.reportarA||'').replace(/\D/g,'');
+  const txt=hoy.length?textoListaHoy(hoy):'';
+  ui.mancText=txt;
+
+  const tjLlamables=tarjetasLlamables();
+  const cuentaLinea=k=>todaCola.filter(x=>accionVigente(x.p).linea===k).length;
+  const cuentaRango=k=>cola.filter(x=>accionVigente(x.p).rango===k).length;
+  // Lo que vale la cola si se cierra: comision sobre el nocional de cada ficha.
+  const potencial=cola.reduce((s,x)=>s+accionVigente(x.p).fee,0);
+
+  const fila=({p,sc})=>{
+    const a=accionVigente(p);
+    return `<div class="manc-row">
+    <div class="manc-sc" style="color:${scoreColor(sc)};border-color:${scoreColor(sc)}">${sc}</div>
+    <div class="manc-main">
+      <strong data-client="${p.id}" style="cursor:pointer">${p.esTarjeta?'📇 ':''}${p.potencial==='alto'?'⭐ ':''}${esc(p.empresa)}</strong>
+      <div class="meta">${esc(p.contacto||'Preguntar por tesorería')}${p.puesto?' · '+esc(p.puesto):''} · ${esc(telBonito(p))}</div>
+      <div class="manc-accion">${chipAccion(p)}<span class="manc-instr">${esc(a.instrumento)}</span>${a.fee?`<span class="manc-fee">${fmtUSD(a.fee)}/año</span>`:''}</div>
+      <div class="manc-why">${razonesCierre(p).map(r=>`<span class="manc-chip">${esc(r)}</span>`).join('')}</div>
+    </div>
+    <div class="manc-acts">
+      <a class="btn-sm" href="tel:${telDigits(p)}">📞</a>
+      <button class="btn-sm" data-seq="${p.id}">📝 Guiones</button>
+    </div>
+  </div>`;};
+
+  const filaPend=p=>`<div class="manc-row">
+    <div class="manc-main">
+      <strong data-client="${p.id}" style="cursor:pointer">${esc(p.empresa)}</strong>
+      <div class="meta">${esc(p.contacto||'—')} · entregada ${p.mancuerna.fecha}</div>
+    </div>
+    <div class="verif-btns" style="flex:1 1 260px">
+      <button class="verif-b ok"     data-mverif="ok"     data-id="${p.id}">✓ Sigue ahí</button>
+      <button class="verif-b cambio" data-mverif="cambio" data-id="${p.id}">↻ Es otra persona</button>
+      <button class="verif-b no"     data-mverif="nolocal" data-id="${p.id}">✗ No localizable</button>
+    </div>
+  </div>`;
+
+  $('#view-mancuerna').innerHTML=`
+    <div class="panel manc-hero">
+      <h3>📤 La lista de hoy <span class="muted">para quien hace las llamadas</span></h3>
+      <p class="muted" style="margin:-8px 0 14px">Un solo mensaje de WhatsApp con los números ya tapeables y la frase de apertura de cada uno. No hay que instalar ni abrir nada del otro lado.</p>
+      <div class="manc-cfg">
+        <label>Cuántas llamadas<select id="manc-n">${
+          // La cuota del plan (Mi Día → 🎯) puede no ser un valor redondo: se
+          // agrega a las opciones para que el select nunca muestre otra cosa.
+          [...new Set([5,10,15,20,30,ui.mancN])].sort((a,b)=>a-b)
+            .map(v=>`<option ${ui.mancN===v?'selected':''}>${v}</option>`).join('')
+        }</select></label>
+        <label>Línea de cobertura<select id="manc-linea">
+          <option value="">Todas (${todaCola.length})</option>
+          ${Object.keys(LINEAS).map(k=>`<option value="${k}" ${ui.mancLinea===k?'selected':''}>${LINEAS[k].icon} ${LINEAS[k].label} (${cuentaLinea(k)})</option>`).join('')}
+        </select></label>
+        <label>Mandar a (WhatsApp, con lada)<input id="manc-tel" value="${esc(state.mancuernaTel||state.reportarA||'')}" placeholder="52 55 1234 5678" /></label>
+      </div>
+      ${tjLlamables?`<label class="manc-tj"><input type="checkbox" id="manc-tj" ${ui.mancTarjetas?'checked':''} />
+        <span>📇 Incluir las <b>${tjLlamables}</b> tarjetas escaneadas con teléfono — es gente que sí se conoció en persona, así que abre mejor que la base fría. Sus datos los leyó la IA de una foto: <b>revisa el nombre antes de mandar</b>.</span></label>`:''}
+      ${avisoBusqueda()}
+      <div class="manc-stats">
+        <div><b>${cola.length}</b><span>en la cola</span></div>
+        <div><b>${fmtUSD(potencial)}</b><span>comisión si cierra la cola</span></div>
+        <div><b>${hoy.length?hoy[hoy.length-1].sc:0}–${hoy.length?hoy[0].sc:0}</b><span>score de hoy</span></div>
+      </div>
+      <div class="manc-rangos">
+        ${RANGOS.map(r=>`<span class="rg-pill" style="--acc:${r.color}"><b>${r.k}</b> ${r.label} · ${cuentaRango(r.k)}</span>`).join('')}
+      </div>
+      ${/* El aviso de "entregadas" va FUERA del bloque de abajo a proposito: al
+            entregar, esos contactos salen de la cola, y si la cola se vacia el
+            bloque no se pinta. Antes eso escondia el boton de Deshacer justo en
+            el caso en que mas hace falta — cuando se entrego de mas. */''}
+      ${ui.mancUndo&&ui.mancUndo.length?`<div class="manc-undo">✅ ${ui.mancUndo.length} marcadas como entregadas — mañana salen otras. <button class="btn-sm" id="manc-undo">Deshacer</button></div>`:''}
+      ${hoy.length?`<div class="manc-btns">
+        <a class="primary-btn big-btn" id="manc-send" target="_blank" href="https://wa.me/${tel}?text=${encodeURIComponent(txt)}">📤 Mandar las ${hoy.length} llamadas por WhatsApp</a>
+        <button class="ghost-btn big-btn" id="manc-copy">📋 Copiar la lista</button>
+      </div>
+      <details class="manc-prev"><summary class="muted">Ver el mensaje tal cual le va a llegar</summary><div class="news-note">${esc(txt)}</div></details>`
+      :empty(todaCola.length&&ui.mancLinea?'Nadie en esta línea hoy — prueba con "Todas".'
+            :cola.length?'Sube el número de llamadas.'
+            :'No hay nadie elegible: se necesita teléfono, y nadie repite antes de '+MANC_REPESCA+' días. Verifica resultados o carga más base.')}
+    </div>
+
+    ${pend.length?`<div class="panel"><h3>🎧 Resultados pendientes <span class="muted">${pend.length}</span></h3>
+      <p class="muted" style="margin:-8px 0 12px">Ya se entregaron y todavía no sabemos qué pasó. Pregúntale cómo le fue y captúralo aquí — esto alimenta la cuota de toques y saca del camino a los que ya no existen.</p>
+      <div class="list">${pend.slice(0,25).map(filaPend).join('')}</div>
+      ${pend.length>25?`<div class="muted" style="margin-top:8px;font-size:12px">+${pend.length-25} más</div>`:''}</div>`:''}
+
+    <div class="panel"><h3>🎯 La cola completa <span class="muted">${cola.length} ordenadas por probabilidad</span></h3>
+      <p class="muted" style="margin:-8px 0 12px">El score pesa cobertura previa, tamaño de la exposición, si fue cliente activo, y si hay con quién hablar. Cada ficha dice por qué está donde está y hasta dónde llega la llamada.</p>
+      <div class="list">${cola.slice(0,60).map(fila).join('')||empty('Cola vacía.')}</div>
+      ${cola.length>60?`<div class="muted" style="margin-top:8px;font-size:12px">+${cola.length-60} más · el resto sale en las listas de los próximos días</div>`:''}</div>
+
+    <div class="modal-overlay hidden" id="manc-seq"></div>`;
+
+  $('#manc-n').onchange=e=>{ ui.mancN=+e.target.value; render(); };
+  $('#manc-linea').onchange=e=>{ ui.mancLinea=e.target.value; render(); };
+  bindLimpiarBusqueda();
+  { const tj=$('#manc-tj'); if(tj) tj.onchange=e=>{ ui.mancTarjetas=e.target.checked; render(); }; }
+  $('#manc-tel').onchange=e=>{ state.mancuernaTel=e.target.value.trim(); save(); toast('Número guardado ✓'); };
+  const send=$('#manc-send');
+  if(send) send.onclick=()=>{ entregarLista(hoy); setTimeout(render,400); };
+  const cp=$('#manc-copy');
+  if(cp) cp.onclick=()=>{ copy(ui.mancText); entregarLista(hoy); render(); };
+  const un=$('#manc-undo'); if(un) un.onclick=deshacerEntrega;
+  $$('[data-seq]').forEach(b=>b.onclick=()=>abrirSecuencia(b.dataset.seq));
+  $$('[data-mverif]').forEach(b=>b.onclick=()=>{
+    const id=b.dataset.id, est=b.dataset.mverif;
+    if(est!=='cambio') return marcarVerif(id,est);
+    openClient(id);                       // el cambio de contacto se captura en la ficha
+    toast('Captura ahí quién es el nuevo contacto');
+  });
+  bindRowClicks();
+}
+
+function abrirSecuencia(id){
+  const p=state.prospects.find(x=>x.id===id); if(!p) return;
+  const s=secuenciaDe(p), d=telDigits(p);
+  const box=$('#manc-seq');
+  box.innerHTML=`<div class="modal">
+    <div class="modal-head"><h2>📝 ${esc(p.empresa)}</h2><button class="icon-btn" data-close-seq>✕</button></div>
+    <div class="modal-body">
+      <p class="muted" style="margin-top:0">Tres toques en tres canales, en este orden. Un solo intento casi nunca contesta.</p>
+      <div class="seq-step"><div class="seq-head"><b>Toque 1 · WhatsApp</b><span class="muted">hoy</span></div>
+        <div class="news-note">${esc(s.wa)}</div>
+        <div class="news-actions"><button class="btn-sm" data-cs="wa">📋 Copiar</button>${d?`<a class="btn-sm" target="_blank" href="https://wa.me/52${d}?text=${encodeURIComponent(s.wa)}">▶ Enviar</a>`:''}</div></div>
+      <div class="seq-step"><div class="seq-head"><b>Toque 2 · Llamada</b><span class="muted">al día siguiente</span></div>
+        <div class="news-note">${esc(s.llamada)}</div>
+        <div class="news-actions"><button class="btn-sm" data-cs="ll">📋 Copiar</button>${d?`<a class="btn-sm" href="tel:${d}">📞 Marcar</a>`:''}</div></div>
+      <div class="seq-step"><div class="seq-head"><b>Toque 3 · Correo</b><span class="muted">3 días después</span></div>
+        <div class="meta" style="margin-bottom:6px">Asunto: <b>${esc(s.asunto)}</b></div>
+        <div class="news-note">${esc(s.correo)}</div>
+        <div class="news-actions"><button class="btn-sm" data-cs="co">📋 Copiar</button>${p.email?`<a class="btn-sm" href="mailto:${esc(p.email)}?subject=${encodeURIComponent(s.asunto)}&body=${encodeURIComponent(s.correo)}">✉ Enviar</a>`:'<span class="muted" style="font-size:11.5px">sin correo en la ficha</span>'}</div></div>
+    </div></div>`;
+  box.classList.remove('hidden');
+  box.querySelector('[data-close-seq]').onclick=()=>box.classList.add('hidden');
+  box.onclick=e=>{ if(e.target===box) box.classList.add('hidden'); };
+  box.querySelectorAll('[data-cs]').forEach(b=>b.onclick=()=>copy({wa:s.wa,ll:s.llamada,co:s.correo}[b.dataset.cs]));
+}
+
 /* ---------- SEGUIMIENTO ---------- */
 function pendingActivities(){ return cartera().filter(p=>p.fechaProxima).map(p=>({p,fecha:p.fechaProxima,accion:p.proximaAccion||'Dar seguimiento',dias:daysFromToday(p.fechaProxima),etapa:p.etapa})).sort((a,b)=>a.dias-b.dias); }
 function badgeFor(d){ if(d<0)return`<span class="badge overdue">Vencida ${-d}d</span>`; if(d===0)return`<span class="badge today">Hoy</span>`; if(d<=7)return`<span class="badge soon">En ${d}d</span>`; return`<span class="tag">En ${d}d</span>`; }
@@ -1436,15 +2355,19 @@ function renderNotas(){
 // Trae datos de mercado a state.market (sin depender del DOM) — usable desde cualquier vista
 async function fetchMarketData(){
   state.market=state.market||{}; const ok=[];
-  const sym={usdmxn:'MXN=X',eurusd:'EURUSD=X',eurmxn:'EURMXN=X',dxy:'DX-Y.NYB',brent:'BZ=F',wti:'CL=F',gasnat:'NG=F',oro:'GC=F',plata:'SI=F',cobre:'HG=F',maiz:'ZC=F',trigo:'ZW=F',soya:'ZS=F',cafe:'KC=F',azucar:'SB=F',sp500:'^GSPC',dow:'^DJI',nasdaq:'^IXIC',ipcmx:'^MXX',nikkei:'^N225',dax:'^GDAXI',vix:'^VIX',ust10:'^TNX'};
-  const dec=k=>(['usdmxn','eurusd','eurmxn'].includes(k)?4:['sp500','dow','nasdaq','nikkei','dax','ipcmx'].includes(k)?0:2);
+  const sym={usdmxn:'MXN=X',eurusd:'EURUSD=X',eurmxn:'EURMXN=X',dxy:'DX-Y.NYB',brent:'BZ=F',wti:'CL=F',gasnat:'NG=F',oro:'GC=F',plata:'SI=F',cobre:'HG=F',aluminio:'ALI=F',maiz:'ZC=F',trigo:'ZW=F',soya:'ZS=F',cafe:'KC=F',azucar:'SB=F',sp500:'^GSPC',dow:'^DJI',nasdaq:'^IXIC',ipcmx:'^MXX',nikkei:'^N225',dax:'^GDAXI',vix:'^VIX',ust10:'^TNX'};
+  const dec=k=>(['usdmxn','eurusd','eurmxn'].includes(k)?4:['sp500','dow','nasdaq','nikkei','dax','ipcmx'].includes(k)?0:k==='azucar'?4:2);
   const proxies=[u=>'https://api.allorigins.win/raw?url='+encodeURIComponent(u), u=>'https://corsproxy.io/?url='+encodeURIComponent(u)];
   const one=async(k,s)=>{ const yu='https://query1.finance.yahoo.com/v8/finance/chart/'+s+'?interval=1d&range=1d';
     for(const px of proxies){ try{
       const ctl=new AbortController(); const to=setTimeout(()=>ctl.abort(),8000);
       const t=await (await fetch(px(yu),{signal:ctl.signal})).text(); clearTimeout(to);
       const p=JSON.parse(t)?.chart?.result?.[0]?.meta?.regularMarketPrice;
-      if(p){ state.market[k]= dec(k)===0?String(Math.round(p)):(+p).toFixed(dec(k)); ok.push(MLAB[k].label); return; }
+      if(p){
+        const v=(+p)*(ESCALA[k]||1);
+        if(!plausibleMkt(k,v)) return;                    // dato raro: mejor omitirlo
+        state.market[k]= dec(k)===0?String(Math.round(v)):v.toFixed(dec(k)); ok.push(MLAB[k].label); return;
+      }
     }catch(e){} } };
   await Promise.allSettled(Object.entries(sym).map(([k,s])=>one(k,s)));
   save(); return ok;
@@ -1529,10 +2452,16 @@ function buildGeneral(modo,fmt,mk){
 
 /* ---------- PRODUCTOS ---------- */
 function renderProductos(){
+  // Los guiones abren por EXPOSICION, no por precio. El spread aparece al
+  // final y como sintoma: sirve para probar que nadie esta viendo el tema, no
+  // como la oferta. Vender centavos invita a que comparen centavos.
   const scripts=[
-    {t:'Apertura en frío',s:`Hola [Nombre], habla [Tu nombre] de ${brand()}. Ayudamos a empresas como [Empresa] a proteger su margen del tipo de cambio y sus insumos, con casas como Marex y StoneX. ¿Hoy cómo manejan su exposición: con la banca, spot, o ya con coberturas?`},
-    {t:'Gancho de ahorro',s:'Muchos clientes pagaban a su banco 15 a 30 centavos por dólar de spread. Nosotros operamos a niveles institucionales. Compárteme tu volumen anual en USD y te calculo el ahorro al año, sin compromiso.'},
-    {t:'Gancho de cobertura',s:'Si el peso (o tu insumo) se mueve 5%, ¿qué pasa con tu margen? Fijamos hoy tu precio con un forward: dejas de adivinar. Te armo un escenario con tus números.'},
+    {t:'Apertura en frío',s:`Hola [Nombre], habla [Tu nombre] de ${brand()}. Trabajamos el riesgo de mercado de empresas como [Empresa]: tipo de cambio, tasa de la deuda y precio de insumos, con casas como Marex y StoneX. ¿Cuál de los tres les pega más hoy?`},
+    {t:'Gancho · tipo de cambio',s:'Si el dólar se mueve 8% en el año, ¿ya saben cuánto le pega a su margen, o se enteran cuando cierran el mes? Con su volumen le pongo el número exacto y dos formas de acotarlo.'},
+    {t:'Gancho · tasas',s:'¿Su deuda está a tasa fija o siguen expuestos a la variable? Sobre 50 millones a tasa flotante, 150 puntos base son $750 mil pesos al año. Un swap lo vuelve un número que se puede presupuestar.'},
+    {t:'Gancho · commodities',s:'Su insumo es el mayor costo variable y se mueve todos los días. ¿Lo compran a precio spot o ya tienen precio cerrado a plazo? Con un collar a costo cero se le pone techo sin pagar prima.'},
+    {t:'Gancho de spread (secundario)',s:'De paso: la mayoría paga a su banco entre 20 y 30 centavos por dólar sin negociarlo. Ese es el síntoma de que nadie está viendo el tema — el dinero grande está en la exposición, no en el spread.'},
+    {t:'Objeción "ya lo vemos con el banco"',s:'Claro, y no le pido que deje su banco: la línea se queda donde está. Le propongo que la cobertura la arme quien la ve todos los días y le cotice contra varios proveedores, no contra uno.'},
     {t:'Cierre a reunión',s:'Te propongo 15 minutos: diagnóstico de exposición sin costo y 2-3 estructuras concretas. ¿Jueves 10 o viernes?'},
   ];
   const byCat={}; state.products.forEach(p=>{(byCat[p.categoria||'Otro']=byCat[p.categoria||'Otro']||[]).push(p);});
@@ -1584,22 +2513,207 @@ function renderPlaybook(){
 /* ---------- AJUSTES ---------- */
 function normName(s){ return (s||'').toString().trim().toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^A-Z0-9]+/g,' ').trim(); }
 function baseSig(){ const b=window.BASE_CLIENTES; return b&&b.length?(b.length+'|'+(b[0]?b[0].empresa:'')):''; }
-function cargarBase(silent){
-  const base=window.BASE_CLIENTES; if(!base||!base.length){ if(!silent)toast('No hay base para cargar'); return; }
-  if(!silent && !confirm('Se cargarán/actualizarán '+base.length+' contactos en TU cartera como "Cliente nuevo" para prospectar. Tus clientes creados a mano se conservan. ¿Continuar?')) return;
-  // refrescar: quitar importaciones previas (se reemplazan por la base actual)
-  state.prospects = state.prospects.filter(p=> !((p.notas||'').includes('Importado:')) );
-  const ex=new Set(state.prospects.map(p=>normName(p.empresa))); let added=0;
-  base.forEach(c=>{ const k=normName(c.empresa); if(!k||ex.has(k))return; ex.add(k);
-    state.prospects.push(Object.assign({},c,{id:uid(),actividades:[],stageHistory:[]})); added++; });
-  state.baseSig=baseSig(); save(); render(); if(!silent)toast('Base cargada: '+added+' clientes para prospectar ✓');
+/* CARGAR / ACTUALIZAR LA BASE — sin tirar el trabajo hecho.
+   Antes esto BORRABA todas las fichas importadas y las volvia a crear. Se
+   llevaba de corbata etapas, actividades, verificaciones y rangos entregados:
+   volver a cargar la base costaba semanas de trabajo. Ahora empareja por nombre
+   de empresa y ACTUALIZA en su lugar.
+
+   Que gana y que pierde cada campo:
+     · empresa, notas .... siempre de la base (ahi vive el estatus historico)
+     · contacto, telefono, email ... de la base SOLO si la ficha no se ha
+       verificado a mano. Si alguien ya hablo con esa empresa y confirmo quien
+       es, esa verificacion humana le gana a una hoja de calculo de 2008.
+     · etapa, actividades, stageHistory, accion, notional, verif ... intactos.  */
+function cargarBase(silent, fuente){
+  const base=fuente||window.BASE_CLIENTES;
+  if(!base||!base.length){ if(!silent)toast('No hay base para cargar'); return; }
+  const idx=new Map();
+  (state.prospects||[]).forEach(p=>{ const k=normName(p.empresa); if(k && !idx.has(k)) idx.set(k,p); });
+  let nuevos=0, actualizados=0, protegidos=0;
+  base.forEach(c=>{
+    const k=normName(c.empresa); if(!k) return;
+    const p=idx.get(k);
+    if(!p){
+      const n=Object.assign({},c,{id:uid(),actividades:[],stageHistory:[],creado:todayISO()});
+      state.prospects.push(n); idx.set(k,n); nuevos++; return;
+    }
+    // Verificado a mano = alguien ya hablo y confirmo. No se le pisa el contacto.
+    const verificado = p.verif && ['ok','cambio'].includes(p.verif.estado);
+    if(verificado) protegidos++;
+    if(!verificado){
+      if(c.contacto) p.contacto=c.contacto;
+      else if((p.notas||'').includes('Importado:')) p.contacto='';   // limpia el heredado malo
+      if(c.telefono) p.telefono=c.telefono;
+      if(c.email)    p.email=c.email;
+    }
+    if(c.notas) p.notas=c.notas;
+    if(c.empresa && c.empresa.length>(p.empresa||'').length) p.empresa=c.empresa;
+    p.actualizado=todayISO();
+    actualizados++;
+  });
+  state.baseSig=baseSig(); save(); render();
+  if(!silent) toast(`Base actualizada ✓ ${nuevos} nuevos · ${actualizados} actualizados`
+    + (protegidos?` · ${protegidos} verificados sin tocar`:''));
+  return {nuevos, actualizados, protegidos};
 }
+
+/* Cargar la base desde un ARCHIVO. Hace falta porque assets/base-datos.js esta
+   en .gitignore (son datos reales de clientes) y por lo tanto no viaja con el
+   sitio publicado: sin esto habria que trabajar desde una copia local. */
+function cargarBaseArchivo(e){
+  const file=e.target.files[0]; e.target.value=''; if(!file) return;
+  const r=new FileReader();
+  r.onload=()=>{
+    let arr=null;
+    try{
+      const t=String(r.result);
+      // Acepta un JSON pelon o el propio base-datos.js (window.BASE_CLIENTES = [...])
+      const m=/BASE_CLIENTES\s*=\s*(\[[\s\S]*\])\s*;?\s*$/.exec(t);
+      arr=JSON.parse(m?m[1]:t);
+      if(!Array.isArray(arr)) arr=arr.prospects||arr.clientes;
+    }catch(err){ arr=null; }
+    if(!Array.isArray(arr)||!arr.length){ toast('Archivo inválido: se esperaba una lista de contactos'); return; }
+    const conCont=arr.filter(x=>x&&x.contacto).length;
+    if(!confirm(`El archivo trae ${arr.length} empresas (${conCont} con contacto).\n\n`
+      +`Se van a ACTUALIZAR las que ya tengas, emparejando por nombre de empresa, y a agregar las que falten.\n\n`
+      +`NO se pierde nada de tu trabajo: etapas, actividades, citas y rangos entregados se quedan igual. `
+      +`Las fichas que ya verificaste por teléfono tampoco se tocan.\n\n¿Continuar?`)) return;
+    const r2=cargarBase(true, arr);
+    toast(`Listo ✓ ${r2.nuevos} nuevos · ${r2.actualizados} actualizados`
+      + (r2.protegidos?` · ${r2.protegidos} verificados sin tocar`:''));
+  };
+  r.readAsText(file);
+}
+/* ---------- CALIDAD DE DATOS -----------------------------------------------
+   La base viene de 17 hojas de calculo de 2008-2020, consolidadas por fuera.
+   Esas hojas traian DOS columnas de persona ("Ejecutivo", que es el ejecutivo
+   del banco, y "Contacto", que es el del cliente) y DOS de telefono ("Tel.
+   Oficina" y "telefono"). Si al consolidar se tomo la columna equivocada, el
+   sintoma es exactamente este: el mismo nombre o el mismo numero repetido en
+   decenas de empresas distintas.
+
+   Esto no lo adivina: lo mide sobre la base real. Un nombre que aparece en 15
+   empresas no es un contacto, es un ejecutivo de banco o un error de arrastre.
+   Y llamar diciendo el nombre equivocado mata la llamada en tres segundos.
+---------------------------------------------------------------------------- */
+const REPETIDO_MIN = 3;          // a partir de cuantas empresas ya es sospechoso
+/* Contactos HEREDADOS: los que aparecen en muchas empresas distintas. Con 5 o
+   mas ya no hay duda razonable — nadie es el contacto de cinco empresas sin
+   relacion. Son ejecutivos del banco que la importacion vieja pego como si
+   fueran del cliente. Se detectan solos, sin necesidad de ningun archivo. */
+const HEREDADO_MIN = 5;
+/* LECTURAS DUDOSAS DE TARJETA. El escaner lee de una foto, y a veces el nombre
+   queda tapado por una firma, un reflejo o un doblez. Cuando eso pasa lo anota.
+   Una ficha asi NO puede entrar a una lista de llamadas: preguntar por un nombre
+   que no existe termina la llamada en el primer segundo. Vale mas llegar sin
+   nombre y preguntar "¿con quién me comunico?". */
+const DUDOSA_RE = /REVISAR:|no legible|ileg[ií]ble|parcialmente legible|no se alcanza|se alcanza a leer|dudos|borros|cortad[oa]|tapad[oa]|sobrepuest|firma encima/i;
+function lecturaDudosa(p){ return !!(p && p.esTarjeta && DUDOSA_RE.test(p.notas||'')); }
+function contactosHeredados(){
+  return repetidos('contacto').filter(([,arr])=>arr.length>=HEREDADO_MIN);
+}
+function limpiarHeredados(){
+  const grupos=contactosHeredados();
+  const total=grupos.reduce((a,[,arr])=>a+arr.length,0);
+  if(!total) return 0;
+  const nombres=grupos.slice(0,6).map(([v,arr])=>`  · ${v} — en ${arr.length} empresas`).join('\n');
+  if(!confirm(`Se encontraron ${grupos.length} nombre(s) repetidos en ${total} fichas:\n\n${nombres}`
+    +(grupos.length>6?`\n  … y ${grupos.length-6} más`:'')
+    +`\n\nNadie es el contacto de ${HEREDADO_MIN}+ empresas sin relación: son ejecutivos del banco que la importación vieja pegó como si fueran del cliente.\n\n`
+    +`Se va a VACIAR el contacto en esas ${total} fichas. El nombre queda anotado en las notas por si sirve de contexto.\n\n`
+    +`No se toca nada más: empresa, teléfono, etapa, actividades y notas se quedan igual.\n\n¿Limpiarlos?`)) return 0;
+  let n=0;
+  grupos.forEach(([nombre,arr])=>arr.forEach(p=>{
+    if(!p.contacto) return;
+    p.contacto='';
+    const marca=`Contacto heredado de la importación (era "${nombre}", ejecutivo del banco): se quitó por aparecer en ${arr.length} empresas. Preguntar al llamar.`;
+    if(!(p.notas||'').includes('Contacto heredado')) p.notas=((p.notas||'').trim()+'\n'+marca).trim();
+    p.actualizado=todayISO(); n++;
+  }));
+  save(); render();
+  toast(`${n} contactos heredados limpiados ✓`);
+  return n;
+}
+function repetidos(campo, norm){
+  const m = new Map();
+  (state.prospects||[]).forEach(p=>{
+    const v = norm ? norm(p[campo]) : String(p[campo]||'').trim();
+    if(!v) return;
+    if(!m.has(v)) m.set(v,[]);
+    m.get(v).push(p);
+  });
+  return [...m.entries()]
+    .filter(([,arr])=>arr.length>=REPETIDO_MIN)
+    .sort((a,b)=>b[1].length-a[1].length);
+}
+// Ojo: ya existe otro normTel mas abajo (deduplicado de tarjetas). Este usa
+// telA10 para que '045 55 ...' y '+52 55 ...' cuenten como el MISMO numero.
+const telParaComparar = t => { const d=(telA10(t).tel||'').replace(/\D/g,''); return d; };
+// Para agrupar repetidos solo cuentan los que de verdad son un numero marcable.
+const telAgrupable = t => { const d=telParaComparar(t); return d.length===10 ? d : ''; };
+function diagnostico(){
+  const todos = state.prospects||[];
+  // "Raro" = TIENE telefono pero telA10 no logra sacar 10 digitos. Los formatos
+  // viejos (045, 01, +52, 52) SI se normalizan bien, asi que no son un problema
+  // y marcarlos seria una falsa alarma — y un panel de calidad que grita de mas
+  // deja de leerse a la semana.
+  const telMal = todos.filter(p=>String(p.telefono||'').trim() && telParaComparar(p.telefono).length!==10);
+  const mailMal = todos.filter(p=>p.email && !/^[^@\s]+@[^@\s.]+\.[^@\s]{2,}$/.test(String(p.email).trim()));
+  return {
+    total: todos.length,
+    contactosRep: repetidos('contacto'),
+    telefonosRep: repetidos('telefono', telAgrupable),
+    sinContacto: todos.filter(p=>!String(p.contacto||'').trim()).length,
+    sinTelefono: todos.filter(p=>telParaComparar(p.telefono).length!==10).length,
+    telMal, mailMal,
+  };
+}
+/* Borra un valor repetido de TODAS las fichas donde aparece. Es lo que salva
+   horas si la importacion tomo la columna equivocada: mejor sin dato que con
+   el dato de otra persona — un contacto vacio se pregunta al llamar; uno
+   equivocado hace que cuelguen. */
+function limpiarCampoEn(ids, campo){
+  let n=0;
+  (state.prospects||[]).forEach(p=>{ if(ids.includes(p.id) && p[campo]){ p[campo]=''; p.actualizado=todayISO(); n++; } });
+  if(n){ save(); render(); toast(`Se vació el ${campo} en ${n} ficha(s) ✓`); }
+}
+
 function renderAjustes(){
   const baseN = (window.BASE_CLIENTES&&window.BASE_CLIENTES.length)||0;
   const basePanel = baseN? `<div class="panel" style="border-color:var(--accent2)"><h3>📥 Tu base de datos de clientes <span class="muted">${baseN} contactos listos</span></h3>
     <p class="muted" style="margin-top:-4px">Tus 17 archivos consolidados en una sola base, todos como <b>"Cliente nuevo"</b> para prospectar desde el inicio del pipeline. El estatus histórico queda en las notas (los que ya operaban van primero). Vuelve a pulsar cuando quieras para actualizar.</p>
     <button class="primary-btn" id="set-cargar-base">📥 Cargar / actualizar mi base (${baseN} clientes)</button></div>`:'';
-  $('#view-ajustes').innerHTML=basePanel+`
+  const dg = diagnostico();
+  const bloqueRep = (titulo, arr, campo, pista) => {
+    if(!arr.length) return `<p class="muted" style="margin:6px 0 0">✓ ${titulo}: nada repetido de forma sospechosa.</p>`;
+    const afectadas = arr.reduce((a,[,x])=>a+x.length,0);
+    return `<div class="dq-grupo">
+      <div class="dq-head"><b>${titulo}</b><span class="dq-alerta">${arr.length} valor(es) · ${afectadas} fichas</span></div>
+      <p class="muted" style="margin:2px 0 8px;font-size:11.5px">${pista}</p>
+      ${arr.slice(0,8).map(([v,ps])=>`<div class="dq-row">
+        <div><b>${esc(v)}</b><div class="meta">${ps.slice(0,4).map(p=>esc(p.empresa||'(sin nombre)')).join(' · ')}${ps.length>4?` y ${ps.length-4} más`:''}</div></div>
+        <div class="dq-acts">
+          <span class="dq-n">${ps.length}</span>
+          <button class="btn-sm" data-dq-ver="${esc(v)}" data-dq-campo="${campo}">Ver</button>
+          <button class="btn-sm" data-dq-limpiar="${ps.map(p=>p.id).join(',')}" data-dq-campo="${campo}" data-dq-val="${esc(v)}">Vaciar en ${ps.length}</button>
+        </div></div>`).join('')}
+      ${arr.length>8?`<div class="muted" style="font-size:11.5px;margin-top:6px">+${arr.length-8} más</div>`:''}
+    </div>`;
+  };
+  const dqPanel = dg.total ? `<div class="panel" style="border-color:var(--gold)">
+    <h3>🔍 Calidad de datos <span class="muted">${dg.total} fichas</span></h3>
+    <p class="muted" style="margin-top:-4px">La base salió de 17 hojas de cálculo que traían <b>dos</b> columnas de persona (<i>Ejecutivo</i> del banco e <i>Contacto</i> del cliente) y <b>dos</b> de teléfono. Si al consolidar se tomó la equivocada, el síntoma es un mismo nombre o número repetido en muchas empresas. Aquí se mide sobre tu base real.</p>
+    <div class="dq-stats">
+      <div><b>${dg.sinContacto}</b><span>sin contacto</span></div>
+      <div><b>${dg.sinTelefono}</b><span>sin teléfono</span></div>
+      <div><b>${dg.telMal.length}</b><span>teléfono con largo raro</span></div>
+      <div><b>${dg.mailMal.length}</b><span>correo inválido</span></div>
+    </div>
+    ${bloqueRep('Contactos repetidos', dg.contactosRep, 'contacto', 'Una persona que aparece en varias empresas distintas casi nunca es el contacto: suele ser el ejecutivo que las atendía. Vaciarlo es mejor que llamar diciendo el nombre equivocado.')}
+    ${bloqueRep('Teléfonos repetidos', dg.telefonosRep, 'telefono', 'Un mismo número en varias empresas suele ser el conmutador de la sucursal, no el del cliente.')}
+  </div>` : '';
+  $('#view-ajustes').innerHTML=basePanel+dqPanel+`
     <div class="panel"><h3>Marca y reportes</h3>
       <label style="max-width:380px">Nombre visible en el dashboard y las notas<input id="set-brand" value="${esc(brand())}" /></label>
       <label style="max-width:380px;margin-top:10px">📤 Reportar mi día a (WhatsApp, con lada) <input id="set-reportar" value="${esc(state.reportarA||'')}" placeholder="52 55 1234 5678" /></label>
@@ -1609,14 +2723,26 @@ function renderAjustes(){
       <div class="list">${state.industries.map(i=>`<div class="list-item"><div><strong>${esc(i.name)}</strong><div class="meta">${(i.vars||[]).map(v=>MLAB[v]?MLAB[v].label:v).join(' · ')||'—'}</div></div><div class="row-actions"><button class="icon-btn" data-ind-edit="${esc(i.name)}">✎</button><button class="icon-btn" data-ind-del="${esc(i.name)}">🗑</button></div></div>`).join('')}</div></div>
     <div class="panel"><h3>Datos y sesión</h3><div style="display:flex;gap:10px;flex-wrap:wrap">
       <button class="ghost-btn" id="set-export">⤓ Respaldar (JSON)</button><button class="ghost-btn" id="set-import">⤒ Restaurar</button>
+      <button class="ghost-btn" id="set-base-file">📥 Cargar base de contactos (archivo)</button>
       <button class="ghost-btn" id="set-csv">⇩ Exportar clientes CSV</button><button class="ghost-btn" id="set-tel">📞 Teléfonos a 10 dígitos</button><button class="ghost-btn danger" id="set-reset">⟲ Vaciar y empezar de cero</button>
       <button class="ghost-btn" id="set-logout">⎋ Cerrar sesión</button>
     </div><p class="muted" style="margin-top:10px">Sesión: <strong>${esc(ME.email)}</strong> · Modo <strong>${DB.mode()}</strong>. ${DB.cloud?'Tus datos se sincronizan en la nube.':'Modo demo: respalda seguido.'}</p></div>`;
+  $$('[data-dq-ver]').forEach(b=>b.onclick=()=>{
+    // Reusa el buscador global: la lista queda filtrada y visible en Clientes.
+    ui.search=b.dataset.dqVer; const c=$('#global-search'); if(c)c.value=ui.search;
+    ui.view='clientes'; render();
+  });
+  $$('[data-dq-limpiar]').forEach(b=>b.onclick=()=>{
+    const ids=b.dataset.dqLimpiar.split(','), campo=b.dataset.dqCampo, val=b.dataset.dqVal;
+    if(confirm(`¿Vaciar el ${campo} "${val}" en ${ids.length} ficha(s)?\n\nNo se borra nada más: la empresa, el correo y las notas se quedan igual. Mejor sin dato que con el de otra persona.`))
+      limpiarCampoEn(ids, campo);
+  });
   $('#set-brand-save').onclick=()=>{state.brand=$('#set-brand').value.trim()||'Insitum Capital';state.reportarA=$('#set-reportar').value.trim();save();render();toast('Guardado ✓');};
   $('#btn-new-industry').onclick=()=>openIndustry(null);
   $$('[data-ind-edit]').forEach(b=>b.onclick=()=>openIndustry(b.dataset.indEdit));
   $$('[data-ind-del]').forEach(b=>b.onclick=()=>{if(confirm('¿Eliminar "'+b.dataset.indDel+'"?')){state.industries=state.industries.filter(i=>i.name!==b.dataset.indDel);save();render();}});
   $('#set-export').onclick=exportJSON; $('#set-import').onclick=()=>$('#file-import').click(); $('#set-csv').onclick=exportCSV;
+  { const b=$('#set-base-file'); if(b) b.onclick=()=>$('#file-base').click(); }
   $('#set-tel').onclick=normalizarTelefonos;
   $('#set-logout').onclick=doLogout;
   { const cb=$('#set-cargar-base'); if(cb) cb.onclick=cargarBase; }
@@ -1996,11 +3122,25 @@ function gruposDuplicados(lista){
   // Solo se marca con claves NO vacias: si no, todas las tarjetas sin telefono
   // acabarian unidas entre si.
   const marca=(k,id)=>{ if(vistas.has(k)) une(vistas.get(k),id); else vistas.set(k,id); };
+  /* EL TELEFONO Y EL CORREO SOLO UNEN DENTRO DE LA MISMA EMPRESA.
+     Antes bastaba con compartir telefono para fusionar dos fichas, aunque
+     fueran empresas distintas. Con una base que arrastra conmutadores y
+     telefonos de ejecutivos repetidos en decenas de empresas, eso encadenaba
+     compañias que no tienen nada que ver: sobrevivia una y ABSORBIA el nombre
+     del contacto de las otras. El sintoma es ver a una persona asignada a una
+     empresa que no es la suya.
+
+     Dos empresas distintas con el mismo conmutador son dos empresas distintas.
+     Una fusion de mas borra datos y no se deshace; una fusion de menos solo
+     deja una ficha repetida, que no le hace dano a nadie. Ante la duda, no se
+     fusiona. */
   lista.forEach(p=>{
     const emp=normEmp(p.empresa);
-    if(emp) marca('n:'+emp+'|'+normEmp(p.contacto), p.id);
-    const tel=normTel(p.telefono); if(tel.length>=8) marca('t:'+tel, p.id);
-    const mail=normMail(p.email);  if(mail) marca('m:'+mail, p.id);
+    if(!emp) return;                                   // sin empresa no se agrupa
+    marca('n:'+emp+'|'+normEmp(p.contacto), p.id);
+    // 10 digitos exactos: un fragmento de 8 es ambiguo y agrupaba de mas.
+    const tel=normTel(p.telefono); if(tel.length===10) marca('t:'+emp+'|'+tel, p.id);
+    const mail=normMail(p.email);  if(mail)            marca('m:'+emp+'|'+mail, p.id);
   });
   const g=new Map();
   lista.forEach(p=>{ const r=raiz(p.id); if(!g.has(r))g.set(r,[]); g.get(r).push(p); });
@@ -2010,6 +3150,12 @@ function gruposDuplicados(lista){
 function fusionarGrupo(grupo){
   const orden=grupo.slice().sort((a,b)=>completitud(b)-completitud(a));
   const queda=orden[0];
+  /* Cinturon de seguridad: si por lo que sea llegara aqui un grupo con dos
+     nombres de empresa distintos, NO se fusiona. Perder el nombre de un
+     contacto para pegarselo a otra compañia es el peor dano posible en esta
+     base, y es irreversible. */
+  const emps=new Set(grupo.map(p=>normEmp(p.empresa)).filter(Boolean));
+  if(emps.size>1) return [];
   const ETIQ={telefono:'Tel',email:'Correo',puesto:'Puesto'};
   orden.slice(1).forEach(o=>{
     const extras=[];
@@ -2063,8 +3209,31 @@ function submitActivity(e){e.preventDefault();const d=Object.fromEntries(new For
 function closeModals(){stopCamera();$$('.modal-overlay').forEach(m=>m.classList.add('hidden'));}
 
 /* ---------- FILTROS / GLOBAL / DATOS ---------- */
-function filtered(){let arr=scopeList();const q=ui.search.toLowerCase().trim();if(q)arr=arr.filter(p=>(p.empresa+' '+(p.contacto||'')+' '+(p.email||'')).toLowerCase().includes(q));if(ui.filtroSeg)arr=arr.filter(p=>p.segmento===ui.filtroSeg);if(ui.filtroProd)arr=arr.filter(p=>(p.productos||[]).includes(ui.filtroProd));if(ui.filtroEtapa)arr=arr.filter(p=>p.etapa===ui.filtroEtapa);
-  if(ui.filtroDatos==='con')arr=arr.filter(p=>compScore(p)>0);else if(ui.filtroDatos==='sin')arr=arr.filter(p=>compScore(p)===0);else if(ui.filtroDatos==='email')arr=arr.filter(p=>p.email);else if(ui.filtroDatos==='tel')arr=arr.filter(p=>p.telefono);else if(ui.filtroDatos==='potencial')arr=arr.filter(p=>p.potencial==='alto');else if(ui.filtroDatos==='operaba')arr=arr.filter(p=>operabaScore(p)>0).sort((a,b)=>operabaScore(b)-operabaScore(a));
+/* Misma coincidencia que usa la tabla: empresa, contacto y correo. Se saca
+   aparte para que Mancuerna y Leads busquen EXACTAMENTE igual que Clientes. */
+function coincideBusqueda(p,q){
+  if(!q) return true;
+  return (String(p.empresa||'')+' '+String(p.contacto||'')+' '+String(p.email||'')+' '+String(p.telefono||''))
+    .toLowerCase().includes(q);
+}
+/* Un filtro que no se ve es un filtro que confunde: se busca en una vista, se
+   cambia a otra y los numeros salen "mal" sin motivo aparente. Este aviso lo
+   hace visible y lo deja quitar de un clic. */
+function avisoBusqueda(){
+  const q=(ui.search||'').trim();
+  if(!q) return '';
+  return `<div class="busq-aviso">🔎 Filtrando por <b>${esc(q)}</b>
+    <button class="btn-sm" data-limpiar-busq>✕ Quitar</button></div>`;
+}
+function bindLimpiarBusqueda(){
+  $$('[data-limpiar-busq]').forEach(b=>b.onclick=()=>{
+    ui.search=''; const c=$('#global-search'); if(c)c.value=''; render();
+  });
+}
+function filtered(){let arr=scopeList();const q=(ui.search||'').toLowerCase().trim();if(q)arr=arr.filter(p=>coincideBusqueda(p,q));if(ui.filtroSeg)arr=arr.filter(p=>p.segmento===ui.filtroSeg);if(ui.filtroProd)arr=arr.filter(p=>(p.productos||[]).includes(ui.filtroProd));if(ui.filtroEtapa)arr=arr.filter(p=>p.etapa===ui.filtroEtapa);if(ui.filtroLinea)arr=arr.filter(p=>accionVigente(p).linea===ui.filtroLinea);if(ui.filtroRango)arr=arr.filter(p=>accionVigente(p).rango===ui.filtroRango);
+  if(ui.filtroDatos==='con')arr=arr.filter(p=>compScore(p)>0);else if(ui.filtroDatos==='sin')arr=arr.filter(p=>compScore(p)===0);else if(ui.filtroDatos==='email')arr=arr.filter(p=>p.email);else if(ui.filtroDatos==='tel')arr=arr.filter(p=>p.telefono);else if(ui.filtroDatos==='potencial')arr=arr.filter(p=>p.potencial==='alto');
+  else if(ui.filtroDatos==='score')arr=arr.filter(p=>scoreCierre(p)>0).sort((a,b)=>(scoreCierre(b)-scoreCierre(a))||porNombre(a,b));
+  else if(ui.filtroDatos==='operaba')arr=arr.filter(p=>operabaScore(p)>0).sort((a,b)=>operabaScore(b)-operabaScore(a));
   // Cola de llamadas: los que faltan por verificar, con teléfono primero y los
   // mejores (ya operaron coberturas) arriba.
   else if(ui.filtroDatos==='porverif')arr=arr.filter(p=>{const e=verifEstado(p);return e==='pendiente'||e==='caduco';})
@@ -2086,7 +3255,33 @@ function bindGlobal(){
   { const b=$('#cam-scan');   if(b)b.onclick=scanShots; }
   { const b=$('#cam-upload'); if(b)b.onclick=()=>$('#card-file').click(); }
   { const cs=$('#cards-save'); if(cs)cs.onclick=saveCardsBatch; }
-  $('#global-search').oninput=e=>{ui.search=e.target.value;if(['clientes','pipeline'].includes(ui.view))render();};
+  /* BUSCADOR GLOBAL. Antes solo repintaba en Clientes y Pipeline: en Mancuerna,
+     Tarjetas o Leads se escribia y no pasaba NADA, o sea que se veia averiado.
+     Peor: el texto si se guardaba, asi que al cambiar de vista aparecia todo
+     filtrado por algo que ya se te habia olvidado que escribiste.
+     Ahora busca en todas las vistas que muestran gente, y se repinta con un
+     respiro de 160 ms para que teclear sobre 2,144 fichas no se sienta pesado. */
+  {
+    const conBusqueda=['clientes','pipeline','tarjetas','mancuerna','leads'];
+    let t=null;
+    $('#global-search').oninput=e=>{
+      ui.search=e.target.value;
+      clearTimeout(t);
+      t=setTimeout(()=>{
+        /* Si la vista de enfrente no muestra gente —Mi Día, que es donde se
+           aterriza, pero también Resumen, Cotizador, Productos…— el buscador
+           tiene que LLEVAR a los resultados. Quedarse callado se siente
+           exactamente igual que un campo deshabilitado, que fue justo lo que
+           se reporto: "el buscador sigue inhabilitado". Un buscador global que
+           no responde desde la pantalla de inicio no sirve de nada. */
+        if(ui.search.trim() && !conBusqueda.includes(ui.view)) ui.view='clientes';
+        render();
+        // render() no toca la barra de arriba, asi que el cursor se queda donde
+        // estaba; esto es solo por si algo mas robo el foco.
+        const c=$('#global-search'); if(c&&document.activeElement!==c) c.focus();
+      },160);
+    };
+  }
   $('#form-prospect').onsubmit=submitProspect; $('#form-prospect').addEventListener('input',updateRevenuePreview);
   $('#form-activity').onsubmit=submitActivity; $('#form-product').onsubmit=submitProduct; $('#form-industry').onsubmit=submitIndustry;
   $('#form-move').onsubmit=submitMove; { const mr=$('#move-reunion'); if(mr)mr.onchange=()=>$('#move-reunion-fields').classList.toggle('hidden',!mr.checked); }
@@ -2099,26 +3294,27 @@ function bindGlobal(){
   document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeModals();closeDrawer();}});
   document.body.addEventListener('click',e=>{const ac=e.target.closest('[data-act]');const sc=e.target.closest('[data-sched]');if(ac){e.stopPropagation();openActivity(ac.dataset.act);}if(sc){e.stopPropagation();openSchedule(sc.dataset.sched);}});
   $('#btn-export').onclick=exportJSON; $('#btn-import').onclick=()=>$('#file-import').click(); $('#file-import').onchange=importJSON;
+  { const fb=$('#file-base'); if(fb) fb.onchange=cargarBaseArchivo; }
   window.addEventListener('beforeunload',flushSave);
 }
 function exportJSON(){const blob=new Blob([JSON.stringify(state,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`insitum-crm-${ME.email}-${todayISO()}.json`;a.click();toast('Respaldo descargado ✓');}
 function importJSON(e){const file=e.target.files[0];if(!file)return;const r=new FileReader();r.onload=()=>{try{const s=JSON.parse(r.result);if(!s.prospects)throw 0;state=migrate(s);save();render();toast('Datos restaurados ✓');}catch(err){toast('Archivo inválido');}};r.readAsText(file);e.target.value='';}
-function exportCSV(){const cols=['empresa','contacto','puesto','telefono','email','segmento','etapa','productos','notional','feeBps','ingresoEst','probabilidad','proximaAccion','fechaProxima'];const rows=state.prospects.map(p=>cols.map(c=>{let v=c==='ingresoEst'?revenueOf(p):c==='productos'?(p.productos||[]).map(prodName).join('; '):p[c];v=(v==null?'':String(v)).replace(/"/g,'""');return `"${v}"`;}).join(','));const csv='﻿'+cols.join(',')+'\n'+rows.join('\n');const blob=new Blob([csv],{type:'text/csv'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`clientes-${todayISO()}.csv`;a.click();toast('CSV exportado ✓');}
+function exportCSV(){const cols=['empresa','contacto','puesto','telefono','email','segmento','linea','rango','instrumento','esTarjeta','etapa','productos','notional','feeBps','ingresoEst','probabilidad','proximaAccion','fechaProxima'];const rows=state.prospects.map(p=>cols.map(c=>{const a=accionVigente(p);let v=c==='ingresoEst'?revenueOf(p):c==='productos'?(p.productos||[]).map(prodName).join('; '):c==='linea'?a.L.label:c==='rango'?a.rango:c==='instrumento'?a.instrumento:c==='esTarjeta'?(p.esTarjeta?'sí':'no'):p[c];v=(v==null?'':String(v)).replace(/"/g,'""');return `"${v}"`;}).join(','));const csv='﻿'+cols.join(',')+'\n'+rows.join('\n');const blob=new Blob([csv],{type:'text/csv'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`clientes-${todayISO()}.csv`;a.click();toast('CSV exportado ✓');}
 
 /* ---------- DATOS POR DEFECTO ---------- */
 function defaultIndustries(){return [
-  {name:'Importador/Exportador',vars:['usdmxn','eurusd','banxico'],tip:'Revisar niveles de cobertura de pagos/cobros en USD.'},
-  {name:'Manufactura/Automotriz',vars:['usdmxn','cobre','aluminio','brent'],tip:'Insumos importados y metálicos; vigilar costo y tipo de cambio.'},
-  {name:'Aerolínea/Transporte',vars:['brent','wti','usdmxn'],tip:'Exposición a turbosina/diésel; evaluar cobertura de energéticos.'},
-  {name:'Agroindustria',vars:['maiz','trigo','soya','cafe','azucar','usdmxn'],tip:'Granos y blandos; fijar precios de insumos/cosecha.'},
-  {name:'Energía/Combustibles',vars:['brent','wti','gasnat','usdmxn'],tip:'Vigilar crudo y gas para márgenes y coberturas.'},
-  {name:'Minería/Metales',vars:['oro','cobre','aluminio','usdmxn'],tip:'Metales preciosos e industriales; cobertura de producción.'},
-  {name:'Retail/Comercio',vars:['usdmxn','eurusd','banxico'],tip:'Importaciones y costo de capital de trabajo.'},
-  {name:'Fintech/Remesas',vars:['usdmxn','eurusd'],tip:'Volumen FX recurrente; optimizar spread.'},
-  {name:'Servicios/Tecnología',vars:['usdmxn','eurusd','banxico'],tip:'Licencias, nube y equipo en USD; honorarios y contratos en divisa.'},
-  {name:'Salud/Farma',vars:['usdmxn','eurusd','banxico'],tip:'Insumos, equipo médico y principios activos importados en USD/EUR.'},
-  {name:'Family Office/Patrimonio',vars:['banxico','cetes','ust10','sp500','oro'],tip:'Renta fija, money market y refugio.'},
-  {name:'Construcción/Inmobiliaria',vars:['usdmxn','cobre','banxico'],tip:'Insumos, tasas y financiamiento.'},
+  {name:'Importador/Exportador',linea:'fx',vars:['usdmxn','eurusd','banxico'],tip:'Descalce entre pagos y cobros en divisa: cubrir el neto, no cada operación.'},
+  {name:'Manufactura/Automotriz',linea:'fx',vars:['usdmxn','cobre','aluminio','brent'],tip:'Doble exposición: insumos metálicos y tipo de cambio. Conviene cubrirlas juntas.'},
+  {name:'Aerolínea/Transporte',linea:'commod',vars:['brent','wti','usdmxn'],tip:'La turbosina y el diésel definen el costo por vuelo o por ruta: es la partida a fijar.'},
+  {name:'Agroindustria',linea:'commod',vars:['maiz','trigo','soya','cafe','azucar','usdmxn'],tip:'Granos y blandos son estacionales: fijar precio de cosecha o de insumo asegura el margen.'},
+  {name:'Energía/Combustibles',linea:'commod',vars:['brent','wti','gasnat','usdmxn'],tip:'Margen de refinación y comercialización: techo al crudo y piso al producto.'},
+  {name:'Minería/Metales',linea:'commod',vars:['oro','cobre','aluminio','usdmxn'],tip:'Cobertura de producción: asegurar el precio de venta del volumen ya comprometido.'},
+  {name:'Retail/Comercio',linea:'fx',vars:['usdmxn','eurusd','banxico'],tip:'Importaciones de temporada: cubrir el pedido cuando se pone la orden, no cuando se paga.'},
+  {name:'Fintech/Remesas',linea:'fx',vars:['usdmxn','eurusd'],tip:'Volumen FX recurrente y descalce intradía: cobertura rodante del libro.'},
+  {name:'Servicios/Tecnología',linea:'fx',vars:['usdmxn','eurusd','banxico'],tip:'Licencias y nube en USD contra ingresos en pesos: contratos anuales, cobertura anual.'},
+  {name:'Salud/Farma',linea:'fx',vars:['usdmxn','eurusd','banxico'],tip:'Insumos y equipo importado con precios de lista en divisa: fijar el costo del ejercicio.'},
+  {name:'Family Office/Patrimonio',linea:'tasas',vars:['banxico','cetes','ust10','sp500','oro'],tip:'Duración y reinversión: qué pasa con el portafolio cuando la tasa baja.'},
+  {name:'Construcción/Inmobiliaria',linea:'tasas',vars:['usdmxn','cobre','banxico'],tip:'Deuda a tasa variable durante la obra: fijarla vuelve predecible el costo del proyecto.'},
 ];}
 function defaultProducts(){return [
   {id:uid(),nombre:'Coberturas cambiarias (Forwards FX)',categoria:'Divisas (FX)',prov:'Marex · StoneX',desc:'Fija el tipo de cambio futuro de tus pagos/cobros.',ideal:'Importadores/exportadores con exposición > USD 1M/año.'},
