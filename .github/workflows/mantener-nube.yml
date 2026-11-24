@@ -1,0 +1,35 @@
+name: Mantener la nube despierta
+
+# Mantiene el proyecto Supabase (plan gratuito) activo para que NO se pause.
+# Reemplaza a keepalive.yml, que GitHub desactivo por inactividad del
+# repositorio el 26-sep-2026 (los horarios se apagan tras 60 dias sin commits).
+#
+# OJO: esto PREVIENE la pausa. Si el proyecto YA esta pausado, un ping no lo
+# despierta: hay que darle "Restore" una vez en el dashboard de Supabase.
+
+on:
+  schedule:
+    - cron: '17 13 * * *'   # diario 13:17 UTC (~7:17 am CDMX)
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ping a Supabase
+        run: |
+          HOST="owvbboityzjezxwlbpaa.supabase.co"
+          # anon key PUBLICA: la misma que sirve la app en assets/config.js.
+          KEY=$(grep -oE "eyJ[A-Za-z0-9._-]+" assets/config.js | head -1)
+          echo "DNS: $(getent hosts "$HOST" || echo SIN_DNS)"
+          code=$(curl -s -m 30 -o /tmp/out.txt -w "%{http_code}" \
+            "https://$HOST/rest/v1/crm_states?select=user_id&limit=1" \
+            -H "apikey: $KEY" -H "Authorization: Bearer $KEY" || true)
+          echo "HTTP $code · respuesta: $(head -c 200 /tmp/out.txt 2>/dev/null)"
+          if [ "$code" = "000" ] || [ "$code" -ge 500 ]; then
+            echo "::error::Supabase no responde (HTTP $code). Si esta pausado: dashboard de Supabase -> Restore project."
+            exit 1
+          fi
